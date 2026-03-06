@@ -1,5 +1,5 @@
 # ============================================================
-#  Digit Tracker v1.3 - Installer
+#  Digit Tracker v1.0 - Installer
 #  https://github.com/YOUR_USERNAME/digit-tracker
 # ============================================================
 
@@ -14,7 +14,7 @@ function Write-Header {
     Clear-Host
     Write-Host ""
     Write-Host "  ==============================================" -ForegroundColor Cyan
-    Write-Host "   DIGIT TRACKER v1.3  -  Installer" -ForegroundColor Cyan
+    Write-Host "   DIGIT TRACKER v1.0  -  Installer" -ForegroundColor Cyan
     Write-Host "   Swertres 3D Lotto Analyzer" -ForegroundColor DarkCyan
     Write-Host "  ==============================================" -ForegroundColor Cyan
     Write-Host ""
@@ -141,7 +141,7 @@ try {
     $Shortcut = $WshShell.CreateShortcut("$env:USERPROFILE\Desktop\Digit Tracker.lnk")
     $Shortcut.TargetPath = $ExeDest
     $Shortcut.WorkingDirectory = $InstallDir
-    $Shortcut.Description = "Digit Tracker v1.3 - Swertres 3D Analyzer"
+    $Shortcut.Description = "Digit Tracker v1.0 - Swertres 3D Analyzer"
     $Shortcut.Save()
     Write-OK "Desktop shortcut created"
 }
@@ -178,4 +178,5 @@ Write-Host ""
 $launch = Read-Host "  Launch Digit Tracker now? (Y/N)"
 if ($launch -match "^[Yy]") {
     Start-Process -FilePath $ExeDest -WorkingDirectory $InstallDir
+
 }
