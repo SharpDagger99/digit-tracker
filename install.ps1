@@ -4,11 +4,12 @@
 # ============================================================
 
 $ErrorActionPreference = "Stop"
-$AppName = "Digit Tracker v1.0"
-$RepoOwner = "YOUR_USERNAME"
-$RepoName = "digit-tracker"
+$AppName    = "Digit Tracker v1.0"
+$RepoOwner  = "SharpDagger99"
+$RepoName   = "digit-tracker"
 $InstallDir = "$env:LOCALAPPDATA\DigitTracker"
-$BaseURL = "https://raw.githubusercontent.com/SharpDagger99/digit-tracker/refs/heads/main/install.ps1"
+$CppURL     = "https://raw.githubusercontent.com/SharpDagger99/digit-tracker/main/digit.cpp"
+$DataURL    = "https://raw.githubusercontent.com/SharpDagger99/digit-tracker/main/digit_data.txt"
 
 function Write-Header {
     Clear-Host
@@ -70,16 +71,15 @@ Write-OK "Directory: $InstallDir"
 # ── Step 3: Download source files ──────────────────────────
 Write-Step "Downloading digit.cpp from GitHub..."
 
-$CppDest = "$InstallDir\digit.cpp"
+$CppDest  = "$InstallDir\digit.cpp"
 $DataDest = "$InstallDir\digit_data.txt"
 
 try {
-    Invoke-WebRequest -Uri "$BaseURL/digit.cpp" -OutFile $CppDest -UseBasicParsing
+    Invoke-WebRequest -Uri $CppURL -OutFile $CppDest -UseBasicParsing
     Write-OK "Downloaded digit.cpp"
-}
-catch {
+} catch {
     Write-Err "Failed to download digit.cpp"
-    Write-Host "  URL: $BaseURL/digit.cpp" -ForegroundColor DarkGray
+    Write-Host "  URL: $CppURL" -ForegroundColor DarkGray
     Write-Host "  Check your internet connection and that the repo is public." -ForegroundColor DarkGray
     Read-Host "  Press Enter to exit"
     exit 1
@@ -89,15 +89,13 @@ catch {
 if (-not (Test-Path $DataDest)) {
     Write-Step "Downloading digit_data.txt (draw history)..."
     try {
-        Invoke-WebRequest -Uri "$BaseURL/digit_data.txt" -OutFile $DataDest -UseBasicParsing
+        Invoke-WebRequest -Uri $DataURL -OutFile $DataDest -UseBasicParsing
         Write-OK "Downloaded digit_data.txt"
-    }
-    catch {
+    } catch {
         Write-Host "  [i] digit_data.txt not found in repo — will be created on first Sync." -ForegroundColor DarkGray
         New-Item -ItemType File -Path $DataDest | Out-Null
     }
-}
-else {
+} else {
     Write-Host "  [i] digit_data.txt already exists — keeping your data." -ForegroundColor DarkGray
 }
 
@@ -114,8 +112,8 @@ $CompileArgs = @(
 
 try {
     $proc = Start-Process -FilePath "g++" -ArgumentList $CompileArgs `
-        -Wait -PassThru -NoNewWindow `
-        -RedirectStandardError "$InstallDir\compile_err.txt"
+                          -Wait -PassThru -NoNewWindow `
+                          -RedirectStandardError "$InstallDir\compile_err.txt"
     if ($proc.ExitCode -ne 0) {
         $errText = Get-Content "$InstallDir\compile_err.txt" -Raw
         Write-Err "Compilation failed (exit code $($proc.ExitCode))"
@@ -126,8 +124,7 @@ try {
     }
     Remove-Item "$InstallDir\compile_err.txt" -ErrorAction SilentlyContinue
     Write-OK "Compiled successfully -> digit.exe"
-}
-catch {
+} catch {
     Write-Err "Could not run g++: $_"
     Read-Host "  Press Enter to exit"
     exit 1
@@ -137,15 +134,14 @@ catch {
 Write-Step "Creating Desktop shortcut..."
 
 try {
-    $WshShell = New-Object -ComObject WScript.Shell
-    $Shortcut = $WshShell.CreateShortcut("$env:USERPROFILE\Desktop\Digit Tracker.lnk")
-    $Shortcut.TargetPath = $ExeDest
+    $WshShell  = New-Object -ComObject WScript.Shell
+    $Shortcut  = $WshShell.CreateShortcut("$env:USERPROFILE\Desktop\Digit Tracker.lnk")
+    $Shortcut.TargetPath       = $ExeDest
     $Shortcut.WorkingDirectory = $InstallDir
-    $Shortcut.Description = "Digit Tracker v1.0 - Swertres 3D Analyzer"
+    $Shortcut.Description      = "Digit Tracker v1.3 - Swertres 3D Analyzer"
     $Shortcut.Save()
     Write-OK "Desktop shortcut created"
-}
-catch {
+} catch {
     Write-Host "  [i] Could not create shortcut (non-fatal): $_" -ForegroundColor DarkGray
 }
 
@@ -156,8 +152,7 @@ $CurrentPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($CurrentPath -notlike "*$InstallDir*") {
     [Environment]::SetEnvironmentVariable("Path", "$CurrentPath;$InstallDir", "User")
     Write-OK "Added to PATH — you can run 'digit' from any terminal after restarting it"
-}
-else {
+} else {
     Write-Host "  [i] Already in PATH" -ForegroundColor DarkGray
 }
 
@@ -178,6 +173,4 @@ Write-Host ""
 $launch = Read-Host "  Launch Digit Tracker now? (Y/N)"
 if ($launch -match "^[Yy]") {
     Start-Process -FilePath $ExeDest -WorkingDirectory $InstallDir
-
 }
-
