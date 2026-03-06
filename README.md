@@ -1,4 +1,4 @@
-# Digit Tracker v1.3
+# Digit Tracker v1.0
 ### Swertres 3D Lotto Analyzer for Windows
 
 A terminal-based Windows app for tracking, analyzing, and predicting Philippine Swertres (3D Lotto) draw results. Fetches live data from [lottopcso.com](https://www.lottopcso.com), supports CSV import, full draw history sync, probability analysis, and a unique **Last Digit** algorithm.
@@ -85,7 +85,7 @@ If you want to compile yourself:
 
 ```bash
 # Clone the repo
-git clone https://github.com/YOUR_USERNAME/digit-tracker.git
+git clone https://github.com/SharpDagger99/digit-tracker.git
 cd digit-tracker
 
 # Compile (requires MinGW-w64 with WinHTTP)
@@ -144,5 +144,6 @@ Remove-Item "$env:USERPROFILE\Desktop\Digit Tracker.lnk" -Force
 Then remove `%LOCALAPPDATA%\DigitTracker` from your user PATH in System Settings.
 
 ---
+
 
 *Data sourced from [lottopcso.com](https://www.lottopcso.com). For personal use only.*
