@@ -10,7 +10,7 @@ A terminal-based Windows app for tracking, analyzing, and predicting Philippine 
 Open **PowerShell** (not CMD) and paste:
 
 ```powershell
-irm https://raw.githubusercontent.com/YOUR_USERNAME/digit-tracker/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/SharpDagger99/digit-tracker/main/install.ps1 | iex
 ```
 
 > **Requires:** Windows 10/11 + [MinGW-w64 (g++)](https://www.msys2.org)  
@@ -147,3 +147,4 @@ Then remove `%LOCALAPPDATA%\DigitTracker` from your user PATH in System Settings
 
 
 *Data sourced from [lottopcso.com](https://www.lottopcso.com). For personal use only.*
+
