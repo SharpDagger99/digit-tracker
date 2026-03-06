@@ -8,7 +8,7 @@ $AppName = "Digit Tracker v1.0"
 $RepoOwner = "YOUR_USERNAME"
 $RepoName = "digit-tracker"
 $InstallDir = "$env:LOCALAPPDATA\DigitTracker"
-$BaseURL = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/main"
+$BaseURL = "https://raw.githubusercontent.com/SharpDagger99/digit-tracker/refs/heads/main/install.ps1"
 
 function Write-Header {
     Clear-Host
@@ -180,3 +180,4 @@ if ($launch -match "^[Yy]") {
     Start-Process -FilePath $ExeDest -WorkingDirectory $InstallDir
 
 }
+
