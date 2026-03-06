@@ -1,3 +1,17 @@
+// ============================================================
+//  Digit Tracker v1.0
+//  Swertres 3D Lotto Analyzer
+//  Cross-platform: Windows (MinGW) + Linux / Android Termux
+//
+//  Windows build:
+//    g++ -std=c++17 -O2 -o digit.exe digit.cpp -lwinhttp
+//
+//  Linux / Termux build:
+//    pkg install clang libcurl   (Termux)
+//    apt install g++ libcurl4-openssl-dev  (Debian/Ubuntu)
+//    g++ -std=c++17 -O2 -o digit digit.cpp -lcurl
+// ============================================================
+
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -6,15 +20,26 @@
 #include <set>
 #include <algorithm>
 #include <iomanip>
+#include <cstring>
+#include <ctime>
+
+// ── Platform detection ───────────────────────────────────
+#ifdef _WIN32
 #include <windows.h>
 #include <winhttp.h>
 #include <conio.h>
-
 #pragma comment(lib, "winhttp.lib")
+#else
+#include <termios.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <curl/curl.h>
+#endif
 
 // ════════════════════════════════════════════════════
-//  CONSOLE HELPERS
+//  CONSOLE HELPERS  — ANSI on Linux, WinAPI on Windows
 // ════════════════════════════════════════════════════
+
 enum Color
 {
     BLACK = 0,
@@ -34,6 +59,14 @@ enum Color
     YELLOW = 14,
     WHITE = 15
 };
+
+struct Pos
+{
+    int X, Y;
+};
+
+#ifdef _WIN32
+
 HANDLE hCon;
 void sc(int fg, int bg = 0) { SetConsoleTextAttribute(hCon, (WORD)(bg << 4 | fg)); }
 void rc() { sc(WHITE, BLACK); }
@@ -44,11 +77,14 @@ void gotoxy(int x, int y)
     c.Y = (SHORT)y;
     SetConsoleCursorPosition(hCon, c);
 }
-COORD gpos()
+Pos gpos()
 {
     CONSOLE_SCREEN_BUFFER_INFO i;
     GetConsoleScreenBufferInfo(hCon, &i);
-    return i.dwCursorPosition;
+    Pos p;
+    p.X = i.dwCursorPosition.X;
+    p.Y = i.dwCursorPosition.Y;
+    return p;
 }
 int CW()
 {
@@ -87,9 +123,6 @@ void cur(bool s)
     SetConsoleCursorInfo(hCon, &i);
 }
 void ms(int t) { Sleep((DWORD)t); }
-
-#define KE 13
-#define KX 27
 int rk()
 {
     int c = _getch();
@@ -100,6 +133,117 @@ int rk()
     }
     return c;
 }
+
+#else // ── Linux / Termux ──────────────────────────
+
+static const char *ANSI_FG[] = {
+    "\033[30m", "\033[34m", "\033[32m", "\033[36m", "\033[31m", "\033[35m",
+    "\033[33m", "\033[37m", "\033[90m", "\033[94m", "\033[92m", "\033[96m",
+    "\033[91m", "\033[95m", "\033[93m", "\033[97m"};
+void sc(int fg, int bg = 0)
+{
+    (void)bg;
+    if (fg >= 0 && fg < 16)
+        std::cout << ANSI_FG[fg];
+}
+void rc() { std::cout << "\033[0m"; }
+void gotoxy(int x, int y) { std::cout << "\033[" << (y + 1) << ";" << (x + 1) << "H" << std::flush; }
+Pos gpos()
+{
+    struct termios oldt, newt;
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    newt.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    std::cout << "\033[6n" << std::flush;
+    int row = 0, col = 0;
+    char c;
+    while (read(STDIN_FILENO, &c, 1) == 1 && c != '\033')
+        ;
+    read(STDIN_FILENO, &c, 1);
+    while (read(STDIN_FILENO, &c, 1) == 1 && c != ';')
+    {
+        if (c >= '0' && c <= '9')
+            row = row * 10 + (c - '0');
+    }
+    while (read(STDIN_FILENO, &c, 1) == 1 && c != 'R')
+    {
+        if (c >= '0' && c <= '9')
+            col = col * 10 + (c - '0');
+    }
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    Pos p;
+    p.X = col - 1;
+    p.Y = row - 1;
+    return p;
+}
+int CW()
+{
+    struct winsize w;
+    ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+    return w.ws_col > 0 ? w.ws_col : 80;
+}
+int CH()
+{
+    struct winsize w;
+    ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+    return w.ws_row > 0 ? w.ws_row : 24;
+}
+void cls() { std::cout << "\033[H\033[2J" << std::flush; }
+void clrLine(int y)
+{
+    gotoxy(0, y);
+    int w = CW();
+    for (int i = 0; i < w; i++)
+        std::cout << ' ';
+    gotoxy(0, y);
+    std::cout << std::flush;
+}
+void cur(bool s) { std::cout << (s ? "\033[?25h" : "\033[?25l") << std::flush; }
+void ms(int t) { usleep((useconds_t)t * 1000); }
+int rk()
+{
+    struct termios oldt, newt;
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    newt.c_lflag &= ~(ICANON | ECHO);
+    newt.c_cc[VMIN] = 1;
+    newt.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    unsigned char c = 0;
+    read(STDIN_FILENO, &c, 1);
+    if (c == 27)
+    {
+        unsigned char c2 = 0, c3 = 0;
+        newt.c_cc[VMIN] = 0;
+        newt.c_cc[VTIME] = 1;
+        tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+        if (read(STDIN_FILENO, &c2, 1) == 1 && c2 == '[')
+        {
+            if (read(STDIN_FILENO, &c3, 1) == 1)
+            {
+                tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+                if (c3 == 'A')
+                    return 72 + 256;
+                if (c3 == 'B')
+                    return 80 + 256;
+                if (c3 == 'C')
+                    return 77 + 256;
+                if (c3 == 'D')
+                    return 75 + 256;
+            }
+        }
+        tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+        return 27;
+    }
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    return (int)c;
+}
+
+#endif // platform
+
+#define KE 13
+#define KX 27
 
 void cprt(const std::string &s, int col = WHITE)
 {
@@ -121,7 +265,7 @@ void hl(char c, int col = DGRAY)
 }
 
 // ════════════════════════════════════════════════════
-//  LOADING
+//  LOADING ANIMATIONS
 // ════════════════════════════════════════════════════
 void showLoad(const std::string &msg, int ms2 = 1600)
 {
@@ -178,7 +322,7 @@ void pulse(const std::string &msg, int cyc = 2)
 }
 
 // ════════════════════════════════════════════════════
-//  DATABASE  (local)
+//  DATABASE
 // ════════════════════════════════════════════════════
 const std::string DB = "digit_data.txt";
 const std::vector<std::string> VT = {"2pm", "5pm", "9pm"};
@@ -243,7 +387,17 @@ std::string inp(const std::string &p, int pc = WHITE, int ic = YELLOW)
     sc(ic);
     std::string s;
     cur(true);
+#ifdef _WIN32
     std::getline(std::cin, s);
+#else
+    struct termios oldt, newt;
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    newt.c_lflag |= (ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    std::getline(std::cin, s);
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+#endif
     rc();
     return trimS(s);
 }
@@ -251,10 +405,12 @@ std::string inp(const std::string &p, int pc = WHITE, int ic = YELLOW)
 // ════════════════════════════════════════════════════
 //  NETWORK
 // ════════════════════════════════════════════════════
-std::string fetchPage(const std::wstring &host, const std::wstring &path)
+#ifdef _WIN32
+
+std::string fetchPageW(const std::wstring &host, const std::wstring &path)
 {
     std::string result;
-    HINTERNET hS = WinHttpOpen(L"DigitTracker/1.2", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET hS = WinHttpOpen(L"DigitTracker/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hS)
         return "";
     HINTERNET hC = WinHttpConnect(hS, host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -301,7 +457,104 @@ std::string fetchPage(const std::wstring &host, const std::wstring &path)
     WinHttpCloseHandle(hS);
     return result;
 }
+bool isOnline()
+{
+    HINTERNET hS = WinHttpOpen(L"DigitTracker/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hS)
+        return false;
+    HINTERNET hC = WinHttpConnect(hS, L"www.lottopcso.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (!hC)
+    {
+        WinHttpCloseHandle(hS);
+        return false;
+    }
+    HINTERNET hR = WinHttpOpenRequest(hC, L"HEAD", L"/", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    DWORD to = 6000;
+    WinHttpSetOption(hR, WINHTTP_OPTION_CONNECT_TIMEOUT, &to, sizeof(to));
+    WinHttpSetOption(hR, WINHTTP_OPTION_RECEIVE_TIMEOUT, &to, sizeof(to));
+    bool ok = hR && WinHttpSendRequest(hR, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) && WinHttpReceiveResponse(hR, NULL);
+    if (hR)
+        WinHttpCloseHandle(hR);
+    WinHttpCloseHandle(hC);
+    WinHttpCloseHandle(hS);
+    return ok;
+}
+std::string fetchPageForYear(int yr, int cy)
+{
+    std::wstring path;
+    if (yr == cy)
+        path = L"/swertres-results-today-history-and-summary/";
+    else
+    {
+        std::wstring ys = std::to_wstring(yr);
+        path = L"/swertres-results-today-history-and-summary-" + ys + L"/";
+    }
+    return fetchPageW(L"www.lottopcso.com", path);
+}
+int getCurrentYear()
+{
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    return st.wYear;
+}
 
+#else // Linux / Termux ──────────────────────────────
+
+static size_t curlWrite(void *ptr, size_t size, size_t nmemb, std::string *data)
+{
+    data->append((char *)ptr, size * nmemb);
+    return size * nmemb;
+}
+std::string fetchPageCurl(const std::string &url)
+{
+    CURL *curl = curl_easy_init();
+    if (!curl)
+        return "";
+    std::string result;
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWrite);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "DigitTracker/1.0");
+    CURLcode res = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+    return (res == CURLE_OK) ? result : "";
+}
+bool isOnline()
+{
+    CURL *curl = curl_easy_init();
+    if (!curl)
+        return false;
+    curl_easy_setopt(curl, CURLOPT_URL, "https://www.lottopcso.com/");
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 6L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    CURLcode res = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+    return res == CURLE_OK;
+}
+std::string fetchPageForYear(int yr, int cy)
+{
+    std::string url;
+    if (yr == cy)
+        url = "https://www.lottopcso.com/swertres-results-today-history-and-summary/";
+    else
+        url = "https://www.lottopcso.com/swertres-results-today-history-and-summary-" + std::to_string(yr) + "/";
+    return fetchPageCurl(url);
+}
+int getCurrentYear()
+{
+    time_t now = time(nullptr);
+    struct tm *t = localtime(&now);
+    return t->tm_year + 1900;
+}
+
+#endif // network
+
+// ── HTML parsing (shared) ──────────────────────────
 std::string stripTags(const std::string &s)
 {
     std::string r;
@@ -334,8 +587,8 @@ std::string stripTags(const std::string &s)
         }
         if (c == 0xE2 && i + 2 < s.size() && (unsigned char)s[i + 1] == 0x80)
         {
-            unsigned char t = (unsigned char)s[i + 2];
-            if (t == 0x93 || t == 0x94)
+            unsigned char t2 = (unsigned char)s[i + 2];
+            if (t2 == 0x93 || t2 == 0x94)
             {
                 r += '-';
                 i += 3;
@@ -351,7 +604,6 @@ std::string stripTags(const std::string &s)
         r.pop_back();
     return r;
 }
-
 std::vector<DrawRow> parseHTML(const std::string &html)
 {
     std::vector<DrawRow> rows;
@@ -396,31 +648,6 @@ std::vector<DrawRow> parseHTML(const std::string &html)
     }
     return rows;
 }
-
-bool isOnline()
-{
-    HINTERNET hS = WinHttpOpen(L"DigitTracker/1.2", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hS)
-        return false;
-    HINTERNET hC = WinHttpConnect(hS, L"www.lottopcso.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (!hC)
-    {
-        WinHttpCloseHandle(hS);
-        return false;
-    }
-    HINTERNET hR = WinHttpOpenRequest(hC, L"HEAD", L"/", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-    DWORD to = 6000;
-    WinHttpSetOption(hR, WINHTTP_OPTION_CONNECT_TIMEOUT, &to, sizeof(to));
-    WinHttpSetOption(hR, WINHTTP_OPTION_RECEIVE_TIMEOUT, &to, sizeof(to));
-    bool ok = hR && WinHttpSendRequest(hR, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) && WinHttpReceiveResponse(hR, NULL);
-    if (hR)
-        WinHttpCloseHandle(hR);
-    WinHttpCloseHandle(hC);
-    WinHttpCloseHandle(hS);
-    return ok;
-}
-
-// Valid digit cell: has at least one non-dash character
 bool validCell(const std::string &s)
 {
     if (s.empty())
@@ -430,7 +657,6 @@ bool validCell(const std::string &s)
             return true;
     return false;
 }
-
 std::vector<Entry> rowsToEntries(const std::vector<DrawRow> &rows)
 {
     std::vector<Entry> v;
@@ -445,30 +671,16 @@ std::vector<Entry> rowsToEntries(const std::vector<DrawRow> &rows)
     }
     return v;
 }
-
-// Fetch one year page and return entries
 std::vector<Entry> fetchYear(int yr, int cy)
 {
-    std::wstring path;
-    if (yr == cy)
-        path = L"/swertres-results-today-history-and-summary/";
-    else
-    {
-        std::wstring ys = std::to_wstring(yr);
-        path = L"/swertres-results-today-history-and-summary-" + ys + L"/";
-    }
-    std::string html = fetchPage(L"www.lottopcso.com", path);
+    std::string html = fetchPageForYear(yr, cy);
     if (html.empty())
         return {};
     return rowsToEntries(parseHTML(html));
 }
-
-// Merge newEntries into existing, skipping duplicates (date+time+digit all match)
-// Returns count of actually added entries
 int mergeIntoDB(const std::vector<Entry> &newEntries)
 {
     auto existing = loadDB();
-    // Build a set of keys for fast lookup
     std::set<std::string> keys;
     for (const auto &e : existing)
         keys.insert(e.date + "|" + e.time + "|" + e.digit);
@@ -487,7 +699,6 @@ int mergeIntoDB(const std::vector<Entry> &newEntries)
     saveDB(merged);
     return added;
 }
-
 void noInternet()
 {
     std::cout << "\n";
@@ -516,17 +727,16 @@ void showIntro()
     ms(150);
     std::vector<std::pair<std::string, int>> art = {
         {" ____  _       _ _    v1.0", CYAN},
-        {"|  _\\(_) __ _(_) |_ ", CYAN},
+        {"|  _ \\(_) __ _(_) |_ ", CYAN},
         {"| | | | |/ _` | | __|", CYAN},
         {"| |_| | | (_| | | |_ ", CYAN},
-        {"|____/|_|\\__,|_|\\__|", CYAN},
-        {"         |___/       ", CYAN},
+        {"|____/|_|\\__,_|_|\\__|", CYAN},
         {"", WHITE},
         {"  _____               _             ", MAGENTA},
         {" |_   _| __ __ _  ___| | _____ _ __ ", MAGENTA},
         {"   | || '__/ _` |/ __| |/ / _ \\ '__|", MAGENTA},
-        {"   | || | | (_| | (__|   <  __/| | ", MAGENTA},
-        {"   |_||_| \\__,_|\\__|_|\\_\\__|_|  ", MAGENTA},
+        {"   | || | | (_| | (__|   <  __/ |  ", MAGENTA},
+        {"   |_||_|  \\__,_|\\___|_|\\_\\___|_|  ", MAGENTA},
     };
     int start = (H - (int)art.size() - 10) / 2;
     if (start < 1)
@@ -570,7 +780,11 @@ void showIntro()
     std::cout << " to begin...";
     rc();
     cur(true);
+#ifdef _WIN32
     FlushConsoleInputBuffer(GetStdHandle(STD_INPUT_HANDLE));
+#else
+    tcflush(STDIN_FILENO, TCIFLUSH);
+#endif
     while (true)
     {
         int k = rk();
@@ -580,7 +794,7 @@ void showIntro()
 }
 
 // ════════════════════════════════════════════════════
-//  CONFIRM DIALOG  (number keys only)
+//  CONFIRM DIALOG
 // ════════════════════════════════════════════════════
 bool confirmDlg(const std::string &action)
 {
@@ -635,7 +849,7 @@ bool confirmDlg(const std::string &action)
         clrLine(sr + 4);
         gotoxy(0, sr + 4);
         sc(DGRAY);
-        std::cout << "  Press 1 = YES   2 = NO   Esc = NO";
+        std::cout << "  Press 1=YES  2=NO  Esc=NO";
         rc();
     };
     draw();
@@ -668,8 +882,7 @@ bool confirmDlg(const std::string &action)
 }
 
 // ════════════════════════════════════════════════════
-//  SUB-MENU A: [1] Continue Local  [2] Continue Online  [3] Help  [4] Back
-//  Returns: 0=local, 1=online, -1=back
+//  SUB-MENU A: Local / Online / Help / Back
 // ════════════════════════════════════════════════════
 int subMenu(const std::string &name, const std::string &helpText)
 {
@@ -766,8 +979,7 @@ int subMenu(const std::string &name, const std::string &helpText)
 }
 
 // ════════════════════════════════════════════════════
-//  SUB-MENU B: [1] Continue  [2] Help  [3] Back
-//  Returns: true=continue, false=back
+//  SUB-MENU B: Continue / Help / Back
 // ════════════════════════════════════════════════════
 bool subMenu2(const std::string &name, const std::string &helpText)
 {
@@ -855,9 +1067,7 @@ bool subMenu2(const std::string &name, const std::string &helpText)
 }
 
 // ════════════════════════════════════════════════════
-//  YEAR PICKER: shown after Continue in Sync DB
-//  Lets user pick: a specific year, a range, or all
-//  Returns list of years to fetch, empty = cancelled
+//  YEAR PICKER
 // ════════════════════════════════════════════════════
 std::vector<int> yearPicker(int cy)
 {
@@ -879,7 +1089,6 @@ std::vector<int> yearPicker(int cy)
     std::cout << cy;
     rc();
     std::cout << "\n\n";
-
     sc(DGRAY);
     std::cout << "  [1] Specific year         e.g.  2024\n";
     std::cout << "  [2] Year range            e.g.  2020 to 2024\n";
@@ -889,7 +1098,6 @@ std::vector<int> yearPicker(int cy)
     sc(DGRAY);
     std::cout << "  Press 1 / 2 / 3 / 4 : ";
     rc();
-
     int choice = 0;
     while (true)
     {
@@ -900,15 +1108,12 @@ std::vector<int> yearPicker(int cy)
             break;
         }
     }
-
     if (choice == 4)
     {
         cls();
         return {};
     }
-
     std::vector<int> years;
-
     if (choice == 1)
     {
         std::cout << "\n";
@@ -937,8 +1142,7 @@ std::vector<int> yearPicker(int cy)
     else if (choice == 2)
     {
         std::cout << "\n";
-        std::string sy1 = inp("  From year: ");
-        std::string sy2 = inp("  To year  : ");
+        std::string sy1 = inp("  From year: "), sy2 = inp("  To year  : ");
         int y1 = 0, y2 = 0;
         try
         {
@@ -960,15 +1164,13 @@ std::vector<int> yearPicker(int cy)
             return {};
         }
         for (int y = y2; y >= y1; y--)
-            years.push_back(y); // newest first
+            years.push_back(y);
     }
     else
     {
         for (int y = cy; y >= 2009; y--)
             years.push_back(y);
     }
-
-    // Show summary and confirm
     std::cout << "\n";
     if (years.size() == 1)
     {
@@ -994,9 +1196,8 @@ std::vector<int> yearPicker(int cy)
         rc();
     }
     sc(DGRAY);
-    std::cout << "  Duplicate entries will be skipped.\n\n";
+    std::cout << "  Duplicates will be skipped.\n\n";
     rc();
-
     if (!confirmDlg("Start sync?"))
     {
         cls();
@@ -1018,30 +1219,17 @@ void doSyncDB()
     rc();
     hl('-', DGRAY);
     std::cout << "\n";
-
     std::string help =
         "  Fetches 3D Lotto results from lottopcso.com\n"
-        "  and stores them in digit_data.txt.\n"
-        "\n"
-        "  After continuing, you will choose:\n"
-        "    [1] A specific year (e.g. 2024)\n"
-        "    [2] A year range   (e.g. 2020-2024)\n"
-        "    [3] All years      (2009 to present)\n"
-        "\n"
-        "  DUPLICATE PROTECTION:\n"
-        "    If digit_data.txt already has entries for\n"
-        "    the same date, time, and digit, they are\n"
-        "    skipped. Only new records are added.\n"
-        "\n"
-        "  Requires an active internet connection.\n";
-
+        "  and stores them in digit_data.txt.\n\n"
+        "  Choose: specific year, range, or all years.\n"
+        "  Duplicate entries are skipped automatically.\n"
+        "  Requires internet connection.\n";
     if (!subMenu2("SYNC DB", help))
     {
         cls();
         return;
     }
-
-    // Check connection before showing year picker
     cls();
     std::cout << "\n";
     sc(DGRAY);
@@ -1051,7 +1239,7 @@ void doSyncDB()
     if (!isOnline())
     {
         sc(RED);
-        std::cout << "\n\n  [!] No internet. Cannot sync.\n";
+        std::cout << "\n\n  [!] No internet.\n";
         rc();
         std::cout << "\n  Press any key...\n";
         rk();
@@ -1062,14 +1250,10 @@ void doSyncDB()
     std::cout << " Connected.\n";
     rc();
     ms(400);
-
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    int cy = st.wYear;
+    int cy = getCurrentYear();
     auto years = yearPicker(cy);
     if (years.empty())
         return;
-
     cls();
     std::cout << "\n";
     hl('=', CYAN);
@@ -1078,11 +1262,8 @@ void doSyncDB()
     rc();
     hl('-', DGRAY);
     std::cout << "\n";
-
-    int totalAdded = 0, totalSkipped = 0, totalFailed = 0;
-    int done = 0, total = (int)years.size();
+    int totalAdded = 0, totalSkipped = 0, totalFailed = 0, done = 0, total = (int)years.size();
     int lr = gpos().Y;
-
     for (int yr : years)
     {
         gotoxy(0, lr);
@@ -1091,7 +1272,6 @@ void doSyncDB()
         std::cout << "  [" << std::setw(3) << done << "/" << total << "]  Fetching " << yr << "...";
         rc();
         std::cout << std::flush;
-
         auto entries = fetchYear(yr, cy);
         if (entries.empty())
         {
@@ -1100,18 +1280,14 @@ void doSyncDB()
             ms(150);
             continue;
         }
-
         int added = mergeIntoDB(entries);
-        int skipped = (int)entries.size() - added;
         totalAdded += added;
-        totalSkipped += skipped;
+        totalSkipped += (int)entries.size() - added;
         done++;
         ms(150);
     }
-
     gotoxy(0, lr);
     clrLine(lr);
-
     std::cout << "\n";
     hl('-', GREEN);
     sc(GREEN);
@@ -1222,7 +1398,7 @@ void doSearchLocal()
         std::cout << "  [x] NOT FOUND  [LOCAL]\n";
         rc();
         sc(DGRAY);
-        std::cout << "  No matching record in digit_data.txt.\n";
+        std::cout << "  No matching record.\n";
         rc();
         hl('-', RED);
     }
@@ -1230,7 +1406,6 @@ void doSearchLocal()
     rk();
     cls();
 }
-
 void doSearchOnline()
 {
     std::cout << "\n";
@@ -1248,20 +1423,17 @@ void doSearchOnline()
         cls();
         return;
     }
-    // Extract year from date string
     int targetYear = 0;
     for (int i = 0; i < (int)date.size() - 3; i++)
-    {
         if (isdigit(date[i]) && isdigit(date[i + 1]) && isdigit(date[i + 2]) && isdigit(date[i + 3]))
         {
             targetYear = std::stoi(date.substr(i, 4));
             break;
         }
-    }
     if (targetYear < 2009)
     {
         sc(RED);
-        std::cout << "  Could not find year in date. Use: Mar 4, 2026\n";
+        std::cout << "  Could not find year. Use: Mar 4, 2026\n";
         rc();
         std::cout << "\n  Press any key...\n";
         rk();
@@ -1282,9 +1454,7 @@ void doSearchOnline()
         noInternet();
         return;
     }
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    int cy = st.wYear;
+    int cy = getCurrentYear();
     int lr = gpos().Y + 1;
     std::cout << "\n";
     gotoxy(2, lr);
@@ -1298,7 +1468,7 @@ void doSearchOnline()
     if (entries.empty())
     {
         sc(RED);
-        std::cout << "\n  Fetch failed or no data.\n";
+        std::cout << "\n  Fetch failed.\n";
         rc();
         std::cout << "\n  Press any key...\n";
         rk();
@@ -1307,7 +1477,6 @@ void doSearchOnline()
     }
     bool found = false;
     for (const auto &e : entries)
-    {
         if (trimS(e.digit) == trimS(digit) && e.time == t && e.date == date)
         {
             found = true;
@@ -1337,7 +1506,6 @@ void doSearchOnline()
             hl('-', GREEN);
             break;
         }
-    }
     if (!found)
     {
         std::cout << "\n";
@@ -1346,7 +1514,7 @@ void doSearchOnline()
         std::cout << "  [x] NOT FOUND  [ONLINE]\n";
         rc();
         sc(DGRAY);
-        std::cout << "  Use exact format shown on site: 'Mar 4, 2026'\n";
+        std::cout << "  Use exact format: 'Mar 4, 2026'\n";
         rc();
         hl('-', RED);
     }
@@ -1354,7 +1522,6 @@ void doSearchOnline()
     rk();
     cls();
 }
-
 void doSearch()
 {
     cls();
@@ -1365,13 +1532,7 @@ void doSearch()
     rc();
     hl('-', DGRAY);
     std::cout << "\n";
-    std::string help =
-        "  LOCAL:  Searches your digit_data.txt file.\n"
-        "          Date format: YYYY-MM-DD\n"
-        "          Digit format: 5-9-2\n"
-        "  ONLINE: Fetches only the specific year page\n"
-        "          for the date you enter.\n"
-        "          Date format: Mar 4, 2026\n";
+    std::string help = "  LOCAL:  Searches digit_data.txt.\n          Date format: YYYY-MM-DD\n  ONLINE: Fetches the specific year page.\n          Date format: Mar 4, 2026\n";
     int c = subMenu("SEARCH", help);
     if (c == -1)
     {
@@ -1397,11 +1558,7 @@ void doInsert()
     rc();
     hl('-', DGRAY);
     std::cout << "\n";
-    std::string help =
-        "  Enter date (YYYY-MM-DD), time (2pm/5pm/9pm),\n"
-        "  and the digit combo (e.g. 5-9-2).\n"
-        "  Existing entry for that date+time is UPDATED.\n"
-        "  Otherwise a NEW entry is created.\n";
+    std::string help = "  Enter date, time, and digit combo.\n  Existing entry for date+time is UPDATED.\n  Otherwise a NEW entry is created.\n";
     if (!subMenu2("INSERT / EDIT", help))
     {
         cls();
@@ -1542,7 +1699,6 @@ void showTableLocal()
         std::cout << " records\n";
     }
 }
-
 void showTableOnline()
 {
     sc(DGRAY);
@@ -1554,15 +1710,12 @@ void showTableOnline()
         noInternet();
         return;
     }
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    int cy = st.wYear;
+    int cy = getCurrentYear();
     const int FY = 2009;
     int total = cy - FY + 1, done = 0;
     std::vector<DrawRow> all;
     int lr = gpos().Y + 1;
     std::cout << "\n";
-    // Fetch newest first: current year down to 2009
     for (int yr = cy; yr >= FY; yr--)
     {
         gotoxy(0, lr);
@@ -1571,15 +1724,7 @@ void showTableOnline()
         std::cout << "  [" << std::setw(3) << done << "/" << total << "]  Fetching " << yr << "...";
         rc();
         std::cout << std::flush;
-        std::wstring path;
-        if (yr == cy)
-            path = L"/swertres-results-today-history-and-summary/";
-        else
-        {
-            std::wstring ys = std::to_wstring(yr);
-            path = L"/swertres-results-today-history-and-summary-" + ys + L"/";
-        }
-        std::string html = fetchPage(L"www.lottopcso.com", path);
+        std::string html = fetchPageForYear(yr, cy);
         if (!html.empty())
         {
             auto r = parseHTML(html);
@@ -1632,7 +1777,6 @@ void showTableOnline()
     std::cout << "  " << shown << " of " << all.size() << " rows shown.\n";
     rc();
 }
-
 void doShowAll()
 {
     cls();
@@ -1643,15 +1787,7 @@ void doShowAll()
     rc();
     hl('-', DGRAY);
     std::cout << "\n";
-    std::string help =
-        "  LOCAL:  Shows all records from digit_data.txt.\n"
-        "          Run Sync DB first to populate.\n"
-        "          Paginated 40 rows at a time.\n"
-        "  ONLINE: Fetches and streams the full history\n"
-        "          from lottopcso.com (2009 to present)\n"
-        "          fetching newest year first.\n"
-        "          Paginated 40 rows at a time.\n"
-        "          Press Space to continue, Q to stop.\n";
+    std::string help = "  LOCAL:  Shows all records from digit_data.txt.\n  ONLINE: Fetches full history (2009-present).\n          Paginated 40 rows. Space=next, Q=stop.\n";
     int c = subMenu("SHOW ALL", help);
     if (c == -1)
     {
@@ -1669,49 +1805,35 @@ void doShowAll()
 }
 
 // ════════════════════════════════════════════════════
-//  SHARED PROBABILITY CALCULATION + DISPLAY
+//  PROBABILITY
 // ════════════════════════════════════════════════════
-// Extract year integer from a date label like "Mar 4, 2026" -> 2026
-// Returns 0 if not found
 int yearFromLabel(const std::string &d)
 {
-    // find last 4-digit number
     int yr = 0;
     for (int i = 0; i + 3 < (int)d.size(); i++)
-    {
         if (isdigit(d[i]) && isdigit(d[i + 1]) && isdigit(d[i + 2]) && isdigit(d[i + 3]))
         {
             int y = std::stoi(d.substr(i, 4));
             if (y > 1900 && y < 2100)
                 yr = y;
         }
-    }
     return yr;
 }
-
-// Convert date label to sortable integer: "Mar 4, 2026" -> 20260304
-// For ordering within same year we embed month+day
 static const char *MON_IDX[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 int dateToInt(const std::string &d)
 {
-    // find year
     int yr = yearFromLabel(d);
     if (yr == 0)
         return 0;
-    // find month name
     int mon = 0;
     for (int m = 0; m < 12; m++)
-    {
         if (d.find(MON_IDX[m]) != std::string::npos)
         {
             mon = m + 1;
             break;
         }
-    }
-    // find day (first 1-2 digit number that isn't the year)
     int day = 0;
     for (size_t i = 0; i < d.size(); i++)
-    {
         if (isdigit(d[i]))
         {
             int num = 0;
@@ -1728,10 +1850,8 @@ int dateToInt(const std::string &d)
             }
             i = j - 1;
         }
-    }
     return yr * 10000 + mon * 100 + day;
 }
-
 void showProbResult(const std::vector<Entry> &entries, const std::string &digit, const std::string &tf, const std::string &src)
 {
     int total = 0, matches = 0;
@@ -1747,13 +1867,9 @@ void showProbResult(const std::vector<Entry> &entries, const std::string &digit,
             hits.push_back(e);
         }
     }
-
-    // Sort hits: newest first (highest dateToInt first)
     std::sort(hits.begin(), hits.end(), [](const Entry &a, const Entry &b)
               { return dateToInt(a.date) > dateToInt(b.date); });
-
     double prob = (total > 0) ? (100.0 * matches / total) : 0.0;
-
     std::cout << "\n";
     hl('=', YELLOW);
     sc(YELLOW);
@@ -1771,48 +1887,41 @@ void showProbResult(const std::vector<Entry> &entries, const std::string &digit,
     std::cout << "\n";
     hl('-', DGRAY);
     std::cout << "\n";
-
     sc(WHITE);
     std::cout << "  Appearances  ";
     sc(DGRAY);
-    std::cout << "(how many times this combo was drawn)";
+    std::cout << "(times drawn)";
     rc();
-    std::cout << "\n";
-    std::cout << "  ";
+    std::cout << "\n  ";
     sc(GREEN);
     std::cout << matches;
     rc();
     std::cout << (matches == 1 ? " time" : " times") << "\n\n";
-
     sc(WHITE);
     std::cout << "  Scope Total  ";
     sc(DGRAY);
-    std::cout << "(total draws checked";
+    std::cout << "(draws checked";
     if (!tf.empty())
         std::cout << " at " << tf;
     else
-        std::cout << " across all slots";
+        std::cout << " all slots";
     std::cout << ")";
     rc();
-    std::cout << "\n";
-    std::cout << "  ";
+    std::cout << "\n  ";
     sc(CYAN);
     std::cout << total;
     rc();
     std::cout << " draw results\n\n";
-
     sc(WHITE);
     std::cout << "  Probability  ";
     sc(DGRAY);
-    std::cout << "(appearances / scope total)";
+    std::cout << "(appearances / scope)";
     rc();
-    std::cout << "\n";
-    std::cout << "  ";
+    std::cout << "\n  ";
     sc(YELLOW);
     std::cout << matches << " / " << total << " = " << std::fixed << std::setprecision(4) << prob << "%";
     rc();
     std::cout << "\n\n";
-
     int fill = (int)(prob / 100.0 * 40);
     if (fill == 0 && matches > 0)
         fill = 1;
@@ -1836,7 +1945,6 @@ void showProbResult(const std::vector<Entry> &entries, const std::string &digit,
     std::cout << std::fixed << std::setprecision(2) << prob << "%";
     rc();
     std::cout << "\n\n";
-
     if (!hits.empty())
     {
         hl('-', DGRAY);
@@ -1849,16 +1957,14 @@ void showProbResult(const std::vector<Entry> &entries, const std::string &digit,
         rc();
         std::cout << "\n";
         hl('-', DGRAY);
-        int shown = 0;
-        int lastYr = -1;
+        int shown = 0, lastYr = -1;
         for (int i = 0; i < (int)hits.size(); i++)
         {
             int yr = yearFromLabel(hits[i].date);
             if (yr != lastYr)
             {
-                // Year group header
                 sc(DARK_CYAN);
-                std::cout << "  ── " << yr << " ──────────────\n";
+                std::cout << "  -- " << yr << " --\n";
                 rc();
                 lastYr = yr;
             }
@@ -1885,15 +1991,11 @@ void showProbResult(const std::vector<Entry> &entries, const std::string &digit,
     else
     {
         sc(DGRAY);
-        std::cout << "  This combo has never appeared in the loaded data.\n";
+        std::cout << "  Never appeared.\n";
         rc();
     }
     hl('=', YELLOW);
 }
-
-// ════════════════════════════════════════════════════
-//  PROBABILITY
-// ════════════════════════════════════════════════════
 void doProb()
 {
     cls();
@@ -1905,27 +2007,13 @@ void doProb()
     hl('-', DGRAY);
     std::cout << "\n";
     std::string help =
-        "  HOW IT WORKS:\n"
-        "\n"
-        "  APPEARANCES:\n"
-        "    How many times the combo (e.g. 5-9-2)\n"
-        "    appeared within the selected scope.\n"
-        "\n"
-        "  SCOPE TOTAL:\n"
-        "    Total draw results checked in the scope.\n"
+        "  APPEARANCES: Times the combo was drawn.\n"
+        "  SCOPE TOTAL: Total draws checked.\n"
         "    No time filter = all 3 slots counted.\n"
-        "    Time filter (e.g. 2pm) = only 2pm draws.\n"
-        "    Example: 1000 draw days x 3 = 3000 total.\n"
-        "\n"
-        "  PROBABILITY:\n"
-        "    appearances / scope total x 100\n"
-        "    E.g. 3 hits out of 3000 = 0.10%\n"
-        "\n"
+        "    Time filter = only that slot.\n"
+        "  PROBABILITY: appearances / scope x 100\n\n"
         "  LOCAL:  Uses digit_data.txt\n"
-        "          Run Sync DB first for full history.\n"
-        "  ONLINE: Fetches all years from lottopcso.com\n"
-        "          newest year first, then analyzes.\n"
-        "\n"
+        "  ONLINE: Fetches all years, then analyzes.\n\n"
         "  DIGIT FORMAT: full combo  e.g.  5-9-2\n";
     int choice = subMenu("PROBABILITY", help);
     if (choice == -1)
@@ -1933,10 +2021,9 @@ void doProb()
         cls();
         return;
     }
-
     std::cout << "\n";
     sc(DGRAY);
-    std::cout << "  Digit format: full combo e.g. 5-9-2\n";
+    std::cout << "  e.g. 5-9-2\n";
     rc();
     std::string digit = inp("  Digit combo to analyze   : ");
     std::string tf = inp("  Filter by time (or blank): ");
@@ -1944,7 +2031,7 @@ void doProb()
     if (!tf.empty() && !vtm(tf))
     {
         sc(RED);
-        std::cout << "  Invalid time. Use 2pm, 5pm, or 9pm.\n";
+        std::cout << "  Invalid time.\n";
         rc();
         std::cout << "\n  Press any key...\n";
         rk();
@@ -1961,17 +2048,14 @@ void doProb()
         cls();
         return;
     }
-
     std::string src = choice == 0 ? "LOCAL" : "ONLINE";
     if (!confirmDlg("Analyze [" + src + "]: " + digit + (tf.empty() ? "" : " | " + tf)))
     {
         cls();
         return;
     }
-
     if (choice == 0)
     {
-        // LOCAL
         pulse("Analyzing local data", 2);
         auto entries = loadDB();
         if (entries.empty())
@@ -1988,7 +2072,6 @@ void doProb()
     }
     else
     {
-        // ONLINE — fetch all years newest first
         sc(DGRAY);
         std::cout << "  Checking connection...";
         rc();
@@ -1998,9 +2081,7 @@ void doProb()
             noInternet();
             return;
         }
-        SYSTEMTIME st;
-        GetLocalTime(&st);
-        int cy = st.wYear;
+        int cy = getCurrentYear();
         const int FY = 2009;
         int total = cy - FY + 1, done = 0;
         std::vector<Entry> all;
@@ -2033,7 +2114,6 @@ void doProb()
         }
         showProbResult(all, digit, tf, "ONLINE — " + std::to_string(all.size()) + " entries");
     }
-
     std::cout << "\n  Press any key...\n";
     rk();
     cls();
@@ -2041,39 +2121,16 @@ void doProb()
 
 // ════════════════════════════════════════════════════
 //  LAST DIGIT
-//
-//  Algorithm:
-//  1. Load all entries, sort oldest -> newest (dateToInt asc).
-//  2. Walk entries from NEWEST to OLDEST.
-//     Maintain a set of "seen combos" as we go backward.
-//     The first time we see a combo (i.e. its LAST occurrence
-//     chronologically) we record it.
-//  3. Keep walking until we have collected N unique combos.
-//     The Nth unique combo found this way is the one that
-//     went the LONGEST without reappearing — the "last digit".
-//  4. Ties on the same day: all combos first appearing on
-//     that day count as ONE slot each (no doubles/triples
-//     within a single draw session collapse it).
-//
-//  "Show multiples" follow-up: finds combos that appeared
-//  on BOTH the last-digit day AND the most recent draw day.
 // ════════════════════════════════════════════════════
-
 struct LastDigitRecord
 {
     std::string digit, date, time;
-    int posInWindow; // position in the 999-draw window (1=start, 999=oldest)
-    int uniqueRank;  // rank among unique combos (1=most recent, last=oldest = "last digit")
+    int posInWindow, uniqueRank;
 };
 
-// entries must already be sorted newest->oldest before calling.
-// startIdx: index into that sorted array where the window begins (0 = most current draw).
-// N: how many last-digits to return (the bottom N of the unique list).
 std::vector<LastDigitRecord> computeLastDigits(const std::vector<Entry> &sorted, int startIdx, int N)
 {
-    int total = (int)sorted.size();
-    int windowEnd = std::min(startIdx + 999, total);
-
+    int total = (int)sorted.size(), windowEnd = std::min(startIdx + 999, total);
     std::set<std::string> seen;
     std::vector<LastDigitRecord> unique;
     for (int i = startIdx; i < windowEnd; i++)
@@ -2091,11 +2148,8 @@ std::vector<LastDigitRecord> computeLastDigits(const std::vector<Entry> &sorted,
             unique.push_back(r);
         }
     }
-
-    // Return last N from unique list, re-ranked so #1 = oldest last-seen
     std::vector<LastDigitRecord> result;
-    int uTotal = (int)unique.size();
-    int start2 = std::max(0, uTotal - N);
+    int uTotal = (int)unique.size(), start2 = std::max(0, uTotal - N);
     for (int i = uTotal - 1; i >= start2; i--)
     {
         LastDigitRecord r = unique[i];
@@ -2104,8 +2158,6 @@ std::vector<LastDigitRecord> computeLastDigits(const std::vector<Entry> &sorted,
     }
     return result;
 }
-
-// Get all combos drawn on a specific date
 std::vector<Entry> getDrawsOnDate(const std::vector<Entry> &all, const std::string &date)
 {
     std::vector<Entry> v;
@@ -2114,7 +2166,6 @@ std::vector<Entry> getDrawsOnDate(const std::vector<Entry> &all, const std::stri
             v.push_back(e);
     return v;
 }
-
 void doLastDigit()
 {
     cls();
@@ -2125,42 +2176,17 @@ void doLastDigit()
     rc();
     hl('-', DGRAY);
     std::cout << "\n";
-
     std::string help =
-        "  WHAT IS LAST DIGIT?\n"
-        "\n"
-        "  Looks at 999 draws starting from a chosen\n"
-        "  point (draw #1 = start, draw #999 = oldest).\n"
-        "\n"
-        "  AUTO FIND:\n"
-        "    Starts from the most current draw in the DB.\n"
-        "\n"
-        "  STARTING POINT:\n"
-        "    You pick a specific date & time to start from.\n"
-        "    The 999-draw window counts backward from there.\n"
-        "    Useful for checking a past point in history.\n"
-        "\n"
-        "  DEDUPLICATION:\n"
-        "    Each combo counts ONCE — only its most recent\n"
-        "    appearance within the window is kept.\n"
-        "    Repeated combos (2x, 3x) collapse into one.\n"
-        "\n"
-        "  RESULT RANKING:\n"
-        "    #1 = true last digit: combo whose last\n"
-        "         appearance is FARTHEST back in the window\n"
-        "    #N = Nth oldest last-seen combo\n"
-        "\n"
-        "  SELECT N (1-9) after choosing start mode.\n"
-        "\n"
-        "  FOLLOW-UP:\n"
-        "    See combos shared between the last-digit day\n"
-        "    and the starting draw day.\n"
-        "\n"
+        "  Looks at 999 draws from a chosen start.\n\n"
+        "  AUTO FIND: starts from most current draw.\n"
+        "  STARTING POINT: pick a specific date & time.\n\n"
+        "  Each combo counted ONCE (most recent only).\n"
+        "  #1 = combo farthest back in window (true last).\n"
+        "  Select N (1-9) = how many last digits to show.\n\n"
+        "  FOLLOW-UP: see combos shared between the\n"
+        "  last-digit day and your start day.\n\n"
         "  Uses local digit_data.txt.\n";
-
-    // ── Custom 4-option entry menu ──────────────────
-    int sr = gpos().Y;
-    int entryChoice = 0;
+    int sr = gpos().Y, entryChoice = 0;
     {
         auto drawEntry = [&](int hi)
         {
@@ -2170,10 +2196,7 @@ void doLastDigit()
             std::cout << "  [ LAST DIGIT ]";
             rc();
             const char *opts[] = {"[1] Auto Find", "[2] Starting Point", "[3] Help", "[4] Back"};
-            const char *desc[] = {"  Use most current draw as start",
-                                  "  Pick a date & time to start from",
-                                  "  How this feature works",
-                                  "  Return to main menu"};
+            const char *desc[] = {"  Most current draw", "  Pick a date & time", "  How this works", "  Return to main menu"};
             for (int i = 0; i < 4; i++)
             {
                 clrLine(sr + 1 + i);
@@ -2225,7 +2248,6 @@ void doLastDigit()
             }
             if (k == '3')
             {
-                // Show help inline
                 gotoxy(0, sr);
                 clrLine(sr);
                 sc(YELLOW);
@@ -2262,8 +2284,6 @@ void doLastDigit()
             }
         }
     }
-
-    // ── Count picker ────────────────────────────────
     cls();
     std::cout << "\n";
     hl('=', DARK_MAG);
@@ -2273,9 +2293,9 @@ void doLastDigit()
     hl('-', DGRAY);
     std::cout << "\n";
     sc(WHITE);
-    std::cout << "  How many last digits do you want to see?\n";
+    std::cout << "  How many last digits?\n";
     sc(DGRAY);
-    std::cout << "  (from the bottom of the 999-draw unique list)\n\n";
+    std::cout << "  (bottom of the 999-draw unique list)\n\n";
     rc();
     for (int i = 1; i <= 9; i++)
     {
@@ -2285,7 +2305,7 @@ void doLastDigit()
         if (i == 1)
             std::cout << "Only #1  (the true last digit)\n";
         else
-            std::cout << "Last " << i << "  (#1=oldest last-seen, #" << i << "=most recent of set)\n";
+            std::cout << "Last " << i << "  (#1=oldest, #" << i << "=most recent of set)\n";
         rc();
     }
     std::cout << "\n";
@@ -2308,42 +2328,26 @@ void doLastDigit()
             break;
         }
     }
-
-    // ── Load & sort ─────────────────────────────────
     pulse("Loading digit_data.txt...", 2);
     auto entries = loadDB();
     if (entries.empty())
     {
         sc(RED);
-        std::cout << "\n  No data. Run Sync DB or Import CSV first.\n";
+        std::cout << "\n  No data.\n";
         rc();
         std::cout << "\n  Press any key...\n";
         rk();
         cls();
         return;
     }
-
     auto slotOrd = [](const std::string &t) -> int
-    {
-        if (t == "9pm")
-            return 2;
-        if (t == "5pm")
-            return 1;
-        return 0;
-    };
+    {if(t=="9pm")return 2;if(t=="5pm")return 1;return 0; };
     std::sort(entries.begin(), entries.end(), [&](const Entry &a, const Entry &b)
               {
-        int da=dateToInt(a.date),db=dateToInt(b.date);
-        if(da!=db)return da>db;
-        return slotOrd(a.time)>slotOrd(b.time); });
-
-    // ── Determine startIdx ───────────────────────────
+        int da=dateToInt(a.date),db=dateToInt(b.date);if(da!=db)return da>db;return slotOrd(a.time)>slotOrd(b.time); });
     int startIdx = 0;
-    std::string startLabel = ""; // shown in header
-
     if (entryChoice == 2)
     {
-        // Ask user for date + time
         cls();
         std::cout << "\n";
         hl('=', DARK_MAG);
@@ -2353,8 +2357,7 @@ void doLastDigit()
         hl('-', DGRAY);
         std::cout << "\n";
         sc(DGRAY);
-        std::cout << "  Enter the draw to start counting backward from.\n";
-        std::cout << "  The 999-draw window will begin at this draw.\n\n";
+        std::cout << "  The 999-draw window begins at this draw.\n\n";
         rc();
         std::string sDate = inp("  Date  (e.g. Mar 5, 2026) : ");
         std::string sTime = inp("  Time  (2pm / 5pm / 9pm)  : ");
@@ -2369,18 +2372,14 @@ void doLastDigit()
             cls();
             return;
         }
-
-        // Find that entry in sorted list
         bool found = false;
         for (int i = 0; i < (int)entries.size(); i++)
-        {
             if (entries[i].date == sDate && entries[i].time == sTime)
             {
                 startIdx = i;
                 found = true;
                 break;
             }
-        }
         if (!found)
         {
             sc(RED);
@@ -2390,46 +2389,32 @@ void doLastDigit()
             rc();
             std::cout << "\n";
             sc(DGRAY);
-            std::cout << "  Make sure the date & time exist in your DB.\n";
+            std::cout << "  Make sure it exists in your DB.\n";
             rc();
             std::cout << "\n  Press any key...\n";
             rk();
             cls();
             return;
         }
-        startLabel = sDate + " " + sTime;
     }
-    else
-    {
-        startLabel = entries[0].date + " " + entries[0].time + " (latest)";
-    }
-
-    // ── Compute ─────────────────────────────────────
-    int totalDB = (int)entries.size();
-    int windowEnd = std::min(startIdx + 999, totalDB);
-    std::string startDateDisplay = entries[startIdx].date;
-    std::string draw999Display = entries[windowEnd - 1].date;
-
+    int totalDB = (int)entries.size(), windowEnd = std::min(startIdx + 999, totalDB);
+    std::string startDateDisplay = entries[startIdx].date, draw999Display = entries[windowEnd - 1].date;
     auto results = computeLastDigits(entries, startIdx, N);
     if (results.empty())
     {
         sc(RED);
-        std::cout << "\n  Not enough data in window.\n";
+        std::cout << "\n  Not enough data.\n";
         rc();
         std::cout << "\n  Press any key...\n";
         rk();
         cls();
         return;
     }
-
-    // Count total unique in window
     std::set<std::string> tmpSeen;
     int totalUnique = 0;
     for (int i = startIdx; i < windowEnd; i++)
         if (tmpSeen.insert(trimS(entries[i].digit)).second)
             totalUnique++;
-
-    // ── Display ─────────────────────────────────────
     cls();
     std::cout << "\n";
     hl('=', DARK_MAG);
@@ -2438,11 +2423,10 @@ void doLastDigit()
     rc();
     hl('-', DGRAY);
     std::cout << "\n";
-
     sc(DGRAY);
-    std::cout << "  Start  : ";
+    std::cout << "  Start : draw #1 = ";
     sc(CYAN);
-    std::cout << "draw #1 = " << startDateDisplay;
+    std::cout << startDateDisplay;
     if (entryChoice == 2)
     {
         sc(YELLOW);
@@ -2453,39 +2437,32 @@ void doLastDigit()
     rc();
     std::cout << "\n";
     sc(DGRAY);
-    std::cout << "  End    : ";
+    std::cout << "  End   : draw #" << (windowEnd - startIdx) << " = ";
     sc(CYAN);
-    std::cout << "draw #" << (windowEnd - startIdx) << " = " << draw999Display;
+    std::cout << draw999Display;
     rc();
     std::cout << "\n";
     sc(DGRAY);
-    std::cout << "  Unique combos in window: ";
+    std::cout << "  Unique: ";
     sc(YELLOW);
     std::cout << totalUnique;
     sc(DGRAY);
-    std::cout << "   |  showing last " << N;
+    std::cout << "  |  showing last " << N;
     rc();
     std::cout << "\n\n";
     hl('-', DGRAY);
     sc(DGRAY);
-    std::cout << "  Rank  Combo       Last seen in window          Window pos\n";
+    std::cout << "  Rank  Combo       Last seen                   Window pos\n";
     rc();
     hl('-', DGRAY);
-
     for (const auto &r : results)
     {
         if (r.uniqueRank == 1)
-        {
             sc(RED);
-        }
         else if (r.uniqueRank == 2)
-        {
             sc(YELLOW);
-        }
         else
-        {
             sc(WHITE);
-        }
         std::cout << "  #" << std::left << std::setw(4) << r.uniqueRank;
         sc(WHITE);
         std::cout << std::setw(12) << r.digit;
@@ -2498,24 +2475,18 @@ void doLastDigit()
         rc();
         std::cout << "\n";
     }
-
     std::cout << "\n";
     hl('-', DGRAY);
     sc(DGRAY);
-    std::cout << "  #1 = combo whose last appearance is farthest back in window\n";
+    std::cout << "  #1 = combo farthest back in window\n";
     rc();
     hl('-', DGRAY);
     std::cout << "\n";
-
-    // ── Follow-up ────────────────────────────────────
-    std::string lastDay = results[0].date;
-    std::string topDay = entries[startIdx].date; // the starting draw day
-
+    std::string lastDay = results[0].date, topDay = entries[startIdx].date;
     while (true)
     {
         sc(DGRAY);
-        std::cout << "  [1] Back to main menu\n";
-        std::cout << "  [2] Show combos drawn on BOTH:\n";
+        std::cout << "  [1] Back to main menu\n  [2] Show combos drawn on BOTH:\n";
         sc(WHITE);
         std::cout << "      last-digit day (";
         sc(RED);
@@ -2531,7 +2502,6 @@ void doLastDigit()
         sc(DGRAY);
         std::cout << "Press 1 or 2 : ";
         rc();
-
         int k = rk();
         if (k == '1' || k == KX)
         {
@@ -2540,21 +2510,16 @@ void doLastDigit()
         }
         if (k != '2')
             continue;
-
-        auto lastDayDraws = getDrawsOnDate(entries, lastDay);
-        auto topDayDraws = getDrawsOnDate(entries, topDay);
-
+        auto lastDayDraws = getDrawsOnDate(entries, lastDay), topDayDraws = getDrawsOnDate(entries, topDay);
         std::set<std::string> lastSet, topSet;
         for (const auto &e : lastDayDraws)
             lastSet.insert(trimS(e.digit));
         for (const auto &e : topDayDraws)
             topSet.insert(trimS(e.digit));
-
         std::vector<std::string> both;
         for (const auto &d : lastSet)
             if (topSet.count(d))
                 both.push_back(d);
-
         cls();
         std::cout << "\n";
         hl('=', DARK_MAG);
@@ -2575,7 +2540,6 @@ void doLastDigit()
         std::cout << topDay;
         rc();
         std::cout << "\n\n";
-
         if (both.empty())
         {
             sc(DGRAY);
@@ -2734,13 +2698,14 @@ void doBrowse()
         noInternet();
         return;
     }
+    int cy = getCurrentYear();
     int lr = gpos().Y;
     gotoxy(2, lr);
     sc(CYAN);
     std::cout << "  Fetching...";
     rc();
     std::cout << std::flush;
-    std::string html = fetchPage(L"www.lottopcso.com", L"/swertres-results-today-history-and-summary/");
+    std::string html = fetchPageForYear(cy, cy);
     clrLine(lr);
     gotoxy(0, lr);
     if (html.empty())
@@ -2791,16 +2756,8 @@ void doBrowse()
 
 // ════════════════════════════════════════════════════
 //  IMPORT CSV
-//  CSV format: ID,DD.MM.YYYY,HH:MM,d1,d2,d3
-//  Time mapping:
-//    11:00 / 14:00  ->  2pm
-//    16:00 / 17:00  ->  5pm
-//    21:00          ->  9pm
-//  Digit: d1-d2-d3  (e.g. 05,09,02 -> 5-9-2)
-//  Date converted to: "Mar 4, 2026" format
 // ════════════════════════════════════════════════════
 static const char *MONTH_NAMES[] = {"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-
 std::string csvTimeToSlot(const std::string &t)
 {
     if (t == "11:00" || t == "14:00")
@@ -2811,11 +2768,8 @@ std::string csvTimeToSlot(const std::string &t)
         return "9pm";
     return "";
 }
-
-// DD.MM.YYYY -> "Mar 4, 2026"
 std::string csvDateToLabel(const std::string &d)
 {
-    // d is "DD.MM.YYYY"
     if (d.size() < 10)
         return d;
     int day = 0, mon = 0, yr = 0;
@@ -2833,11 +2787,8 @@ std::string csvDateToLabel(const std::string &d)
         return d;
     return std::string(MONTH_NAMES[mon]) + " " + std::to_string(day) + ", " + std::to_string(yr);
 }
-
-// Parse one CSV line into an Entry. Returns false if invalid/skip.
 bool parseCSVLine(const std::string &line, Entry &out)
 {
-    // Fields: id, date, time, d1, d2, d3
     std::istringstream ss(line);
     std::string id, date, time, d1, d2, d3;
     if (!std::getline(ss, id, ','))
@@ -2862,20 +2813,13 @@ bool parseCSVLine(const std::string &line, Entry &out)
     std::string slot = csvTimeToSlot(time);
     if (slot.empty())
         return false;
-    // Remove leading zeros from digits: "05" -> "5"
     auto strip0 = [](std::string s) -> std::string
-    {
-        while (s.size() > 1 && s[0] == '0')
-            s.erase(s.begin());
-        return s;
-    };
-    std::string combo = strip0(d1) + "-" + strip0(d2) + "-" + strip0(d3);
+    {while(s.size()>1&&s[0]=='0')s.erase(s.begin());return s; };
     out.date = csvDateToLabel(date);
     out.time = slot;
-    out.digit = combo;
+    out.digit = strip0(d1) + "-" + strip0(d2) + "-" + strip0(d3);
     return true;
 }
-
 void doImportCSV()
 {
     cls();
@@ -2886,38 +2830,20 @@ void doImportCSV()
     rc();
     hl('-', DGRAY);
     std::cout << "\n";
-
     std::string help =
-        "  Imports 3D Lotto results from a CSV file\n"
-        "  and merges them into digit_data.txt.\n"
-        "\n"
-        "  EXPECTED CSV FORMAT:\n"
-        "    ID, DD.MM.YYYY, HH:MM, d1, d2, d3\n"
-        "    e.g.  00001,02.01.2007,11:00,05,08,07\n"
-        "\n"
-        "  TIME MAPPING:\n"
-        "    11:00 or 14:00  ->  2pm\n"
-        "    16:00 or 17:00  ->  5pm\n"
-        "    21:00           ->  9pm\n"
-        "\n"
-        "  DIGIT FORMAT stored: 5-9-2  (leading zeros removed)\n"
-        "  DATE FORMAT stored:  Mar 4, 2026\n"
-        "\n"
-        "  DUPLICATES: Entries already in digit_data.txt\n"
-        "  (same date + time + digit) are skipped.\n"
-        "\n"
-        "  Place the CSV file in the same folder as\n"
-        "  digit.exe, then enter its filename below.\n";
-
+        "  FORMAT: ID,DD.MM.YYYY,HH:MM,d1,d2,d3\n"
+        "  e.g.  00001,02.01.2007,11:00,05,08,07\n\n"
+        "  TIME: 11:00/14:00->2pm  16:00/17:00->5pm  21:00->9pm\n"
+        "  Duplicates (same date+time+digit) are skipped.\n"
+        "  Place the CSV in the same folder as digit.\n";
     if (!subMenu2("IMPORT CSV", help))
     {
         cls();
         return;
     }
-
     std::cout << "\n";
     sc(DGRAY);
-    std::cout << "  Place the CSV in the same folder as digit.exe\n";
+    std::cout << "  Place the CSV in the same folder as digit\n";
     rc();
     std::string filename = inp("  CSV filename (e.g. swertres.csv): ");
     if (filename.empty())
@@ -2925,12 +2851,9 @@ void doImportCSV()
         cls();
         return;
     }
-
-    // Try to open file
     std::ifstream f(filename);
     if (!f.is_open())
     {
-        // Try with .csv appended if not already
         if (filename.find('.') == std::string::npos)
         {
             f.open(filename + ".csv");
@@ -2943,13 +2866,13 @@ void doImportCSV()
         std::cout << "\n";
         hl('-', RED);
         sc(RED);
-        std::cout << "  [!] Cannot open file: ";
+        std::cout << "  [!] Cannot open: ";
         sc(WHITE);
         std::cout << filename;
         rc();
         std::cout << "\n";
         sc(DGRAY);
-        std::cout << "  Make sure the file is in the same folder as digit.exe\n";
+        std::cout << "  Make sure the file is in the same folder.\n";
         rc();
         hl('-', RED);
         std::cout << "\n  Press any key...\n";
@@ -2957,8 +2880,6 @@ void doImportCSV()
         cls();
         return;
     }
-
-    // Count lines first for progress
     int totalLines = 0;
     {
         std::string tmp;
@@ -2968,15 +2889,12 @@ void doImportCSV()
     }
     f.clear();
     f.seekg(0);
-
     if (!confirmDlg("Import " + std::to_string(totalLines) + " rows from " + filename + "?"))
     {
         f.close();
         cls();
         return;
     }
-
-    // Parse all valid entries
     std::cout << "\n";
     int lr = gpos().Y;
     std::vector<Entry> parsed;
@@ -3006,16 +2924,15 @@ void doImportCSV()
     f.close();
     clrLine(lr);
     gotoxy(0, lr);
-
     if (parsed.empty())
     {
         std::cout << "\n";
         hl('-', RED);
         sc(RED);
-        std::cout << "  [!] No valid records found in CSV.\n";
+        std::cout << "  [!] No valid records found.\n";
         rc();
         sc(DGRAY);
-        std::cout << "  Check the file format matches the expected format.\n";
+        std::cout << "  Check the CSV format.\n";
         rc();
         hl('-', RED);
         std::cout << "\n  Press any key...\n";
@@ -3023,12 +2940,8 @@ void doImportCSV()
         cls();
         return;
     }
-
-    // Merge into DB (deduplication)
     pulse("Merging into digit_data.txt", 2);
-    int added = mergeIntoDB(parsed);
-    int dupSkipped = (int)parsed.size() - added;
-
+    int added = mergeIntoDB(parsed), dupSkipped = (int)parsed.size() - added;
     std::cout << "\n";
     hl('-', GREEN);
     sc(GREEN);
@@ -3113,7 +3026,7 @@ void mainMenu()
         cur(false);
         std::cout << "\n";
         hl('=', CYAN);
-        cprt("  D I G I T   T R A C K E R   v 1 . 3  ", CYAN);
+        cprt("  D I G I T   T R A C K E R   v 1 . 0  ", CYAN);
         std::cout << "\n";
         cprt("  Local & Online  |  Swertres 3D  |  lottopcso.com  ", DGRAY);
         std::cout << "\n";
@@ -3215,8 +3128,12 @@ void mainMenu()
     }
 }
 
+// ════════════════════════════════════════════════════
+//  MAIN
+// ════════════════════════════════════════════════════
 int main()
 {
+#ifdef _WIN32
     hCon = GetStdHandle(STD_OUTPUT_HANDLE);
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
@@ -3228,9 +3145,15 @@ int main()
     SetConsoleWindowInfo(hCon, TRUE, &ws);
     COORD bs = {100, 3000};
     SetConsoleScreenBufferSize(hCon, bs);
+#else
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+#endif
     showIntro();
     mainMenu();
     rc();
     cur(true);
+#ifndef _WIN32
+    curl_global_cleanup();
+#endif
     return 0;
 }
