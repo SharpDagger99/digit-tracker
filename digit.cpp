@@ -1,5 +1,5 @@
 // ============================================================
-//  Digit Tracker v1.0
+//  Digit Tracker v1.1
 //  Swertres 3D Lotto Analyzer
 //  Cross-platform: Windows (MinGW) + Linux / Android Termux
 //
@@ -10,6 +10,16 @@
 //    pkg install clang libcurl   (Termux)
 //    apt install g++ libcurl4-openssl-dev  (Debian/Ubuntu)
 //    g++ -std=c++17 -O2 -o digit digit.cpp -lcurl
+//
+//  Changelog v1.1:
+//    - New DIGIT TRACKER block-letter logo
+//    - S-R-W: filter view (All/Strong/Random/Weak) + top-5 highlight
+//    - Last Digit: shows repeating-digit combos in the gap window
+//    - Import: file browser (GUI/list) + terminal path input
+//    - Insert/Edit and Delete removed
+//    - Local + Online auto-mixed: internet silently syncs latest draws
+//    - Last Digit window = 1000 draws; N input is free text (1-999)
+//    - Digit input accepts nodash format: "592" -> "5-9-2"
 // ============================================================
 
 #include <iostream>
@@ -18,28 +28,32 @@
 #include <vector>
 #include <string>
 #include <set>
+#include <map>
 #include <algorithm>
 #include <iomanip>
 #include <cstring>
 #include <ctime>
+#include <cmath>
 
 // ── Platform detection ───────────────────────────────────
 #ifdef _WIN32
 #include <windows.h>
 #include <winhttp.h>
 #include <conio.h>
+#include <commdlg.h>
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "comdlg32.lib")
 #else
 #include <termios.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <dirent.h>
 #include <curl/curl.h>
 #endif
 
 // ════════════════════════════════════════════════════
-//  CONSOLE HELPERS  — ANSI on Linux, WinAPI on Windows
+//  CONSOLE HELPERS
 // ════════════════════════════════════════════════════
-
 enum Color
 {
     BLACK = 0,
@@ -59,7 +73,6 @@ enum Color
     YELLOW = 14,
     WHITE = 15
 };
-
 struct Pos
 {
     int X, Y;
@@ -134,7 +147,7 @@ int rk()
     return c;
 }
 
-#else // ── Linux / Termux ──────────────────────────
+#else // Linux / Termux ─────────────────────────────
 
 static const char *ANSI_FG[] = {
     "\033[30m", "\033[34m", "\033[32m", "\033[36m", "\033[31m", "\033[35m",
@@ -247,7 +260,8 @@ int rk()
 
 void cprt(const std::string &s, int col = WHITE)
 {
-    int p = (CW() - (int)s.size()) / 2;
+    int w = CW();
+    int p = (w - (int)s.size()) / 2;
     if (p > 0)
         std::cout << std::string(p, ' ');
     sc(col);
@@ -343,6 +357,23 @@ std::string trimS(std::string s)
         s.pop_back();
     return s;
 }
+std::string normalizeDigit(const std::string &raw)
+{
+    std::string s = trimS(raw);
+    std::vector<char> digits;
+    for (char c : s)
+        if (isdigit(c))
+            digits.push_back(c);
+    if (digits.size() != 3)
+        return "";
+    std::string r;
+    r += digits[0];
+    r += '-';
+    r += digits[1];
+    r += '-';
+    r += digits[2];
+    return r;
+}
 std::vector<Entry> loadDB()
 {
     std::vector<Entry> v;
@@ -401,6 +432,38 @@ std::string inp(const std::string &p, int pc = WHITE, int ic = YELLOW)
     rc();
     return trimS(s);
 }
+std::string inpDigit(const std::string &p)
+{
+    while (true)
+    {
+        std::string raw = inp(p);
+        if (raw.empty())
+        {
+            sc(RED);
+            std::cout << "  Digit cannot be empty.\n";
+            rc();
+            continue;
+        }
+        std::string norm = normalizeDigit(raw);
+        if (norm.empty())
+        {
+            sc(RED);
+            std::cout << "  Invalid digit. Use: 5-9-2 or 592\n";
+            rc();
+            continue;
+        }
+        if (norm != raw)
+        {
+            sc(DGRAY);
+            std::cout << "  -> ";
+            sc(YELLOW);
+            std::cout << norm;
+            rc();
+            std::cout << "\n";
+        }
+        return norm;
+    }
+}
 
 // ════════════════════════════════════════════════════
 //  NETWORK
@@ -410,7 +473,7 @@ std::string inp(const std::string &p, int pc = WHITE, int ic = YELLOW)
 std::string fetchPageW(const std::wstring &host, const std::wstring &path)
 {
     std::string result;
-    HINTERNET hS = WinHttpOpen(L"DigitTracker/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET hS = WinHttpOpen(L"DigitTracker/1.1", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hS)
         return "";
     HINTERNET hC = WinHttpConnect(hS, host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -459,7 +522,7 @@ std::string fetchPageW(const std::wstring &host, const std::wstring &path)
 }
 bool isOnline()
 {
-    HINTERNET hS = WinHttpOpen(L"DigitTracker/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET hS = WinHttpOpen(L"DigitTracker/1.1", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hS)
         return false;
     HINTERNET hC = WinHttpConnect(hS, L"www.lottopcso.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -469,7 +532,7 @@ bool isOnline()
         return false;
     }
     HINTERNET hR = WinHttpOpenRequest(hC, L"HEAD", L"/", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-    DWORD to = 6000;
+    DWORD to = 5000;
     WinHttpSetOption(hR, WINHTTP_OPTION_CONNECT_TIMEOUT, &to, sizeof(to));
     WinHttpSetOption(hR, WINHTTP_OPTION_RECEIVE_TIMEOUT, &to, sizeof(to));
     bool ok = hR && WinHttpSendRequest(hR, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) && WinHttpReceiveResponse(hR, NULL);
@@ -498,7 +561,7 @@ int getCurrentYear()
     return st.wYear;
 }
 
-#else // Linux / Termux ──────────────────────────────
+#else
 
 static size_t curlWrite(void *ptr, size_t size, size_t nmemb, std::string *data)
 {
@@ -518,7 +581,7 @@ std::string fetchPageCurl(const std::string &url)
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "DigitTracker/1.0");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "DigitTracker/1.1");
     CURLcode res = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
     return (res == CURLE_OK) ? result : "";
@@ -530,7 +593,7 @@ bool isOnline()
         return false;
     curl_easy_setopt(curl, CURLOPT_URL, "https://www.lottopcso.com/");
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 6L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     CURLcode res = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
@@ -552,9 +615,9 @@ int getCurrentYear()
     return t->tm_year + 1900;
 }
 
-#endif // network
+#endif
 
-// ── HTML parsing (shared) ──────────────────────────
+// ── HTML parsing ─────────────────────────────────────
 std::string stripTags(const std::string &s)
 {
     std::string r;
@@ -699,25 +762,77 @@ int mergeIntoDB(const std::vector<Entry> &newEntries)
     saveDB(merged);
     return added;
 }
-void noInternet()
+
+// ── Auto-sync ────────────────────────────────────────
+int tryAutoSync(bool showStatus = true)
 {
-    std::cout << "\n";
-    hl('-', RED);
-    sc(RED);
-    std::cout << "  [!] NO INTERNET\n";
-    rc();
-    sc(WHITE);
-    std::cout << "  Could not reach lottopcso.com.\n";
-    sc(DGRAY);
-    std::cout << "  Returning to main menu...\n";
-    rc();
-    hl('-', RED);
-    ms(2000);
-    cls();
+    if (!isOnline())
+        return 0;
+    int cy = getCurrentYear();
+    auto entries = fetchYear(cy, cy);
+    if (entries.empty())
+        return 0;
+    int added = mergeIntoDB(entries);
+    if (added > 0 && showStatus)
+    {
+        sc(GREEN);
+        std::cout << "  [+]";
+        sc(DGRAY);
+        std::cout << " " << added << " new record" << (added == 1 ? "" : "s") << " synced\n";
+        rc();
+    }
+    return added;
+}
+
+// ── Date helpers ─────────────────────────────────────
+int yearFromLabel(const std::string &d)
+{
+    int yr = 0;
+    for (int i = 0; i + 3 < (int)d.size(); i++)
+        if (isdigit(d[i]) && isdigit(d[i + 1]) && isdigit(d[i + 2]) && isdigit(d[i + 3]))
+        {
+            int y = std::stoi(d.substr(i, 4));
+            if (y > 1900 && y < 2100)
+                yr = y;
+        }
+    return yr;
+}
+static const char *MON_IDX[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+int dateToInt(const std::string &d)
+{
+    int yr = yearFromLabel(d);
+    if (yr == 0)
+        return 0;
+    int mon = 0;
+    for (int m = 0; m < 12; m++)
+        if (d.find(MON_IDX[m]) != std::string::npos)
+        {
+            mon = m + 1;
+            break;
+        }
+    int day = 0;
+    for (size_t i = 0; i < d.size(); i++)
+        if (isdigit(d[i]))
+        {
+            int num = 0;
+            size_t j = i;
+            while (j < d.size() && isdigit(d[j]))
+            {
+                num = num * 10 + (d[j] - '0');
+                j++;
+            }
+            if (num >= 1 && num <= 31)
+            {
+                day = num;
+                break;
+            }
+            i = j - 1;
+        }
+    return yr * 10000 + mon * 100 + day;
 }
 
 // ════════════════════════════════════════════════════
-//  INTRO
+//  INTRO — new block-letter logo (UTF-8)
 // ════════════════════════════════════════════════════
 void showIntro()
 {
@@ -725,43 +840,57 @@ void showIntro()
     cur(false);
     int H = CH();
     ms(150);
+
+    // Block letter logo lines — DIGIT on top, TRACKER below
+    // Each line stored as UTF-8 string literal
     std::vector<std::pair<std::string, int>> art = {
-        {" ____  _       _ _    v1.0", CYAN},
-        {"|  _ \\(_) __ _(_) |_ ", CYAN},
-        {"| | | | |/ _` | | __|", CYAN},
-        {"| |_| | | (_| | | |_ ", CYAN},
-        {"|____/|_|\\__,_|_|\\__|", CYAN},
+        {"\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97 \xe2\x96\x88\xe2\x96\x88\xe2\x95\x97 \xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97 \xe2\x96\x88\xe2\x96\x88\xe2\x95\x97\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97      v1.1", CYAN},
+        {"\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x9d \xe2\x96\x88\xe2\x96\x88\xe2\x95\x91\xe2\x95\x9a\xe2\x95\x90\xe2\x95\x90\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x95\x9d", CYAN},
+        {"\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91  \xe2\x96\x88\xe2\x96\x88\xe2\x95\x91\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91  \xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91   \xe2\x96\x88\xe2\x96\x88\xe2\x95\x91", CYAN},
+        {"\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91  \xe2\x96\x88\xe2\x96\x88\xe2\x95\x91\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91   \xe2\x96\x88\xe2\x96\x88\xe2\x95\x91\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91   \xe2\x96\x88\xe2\x96\x88\xe2\x95\x91", CYAN},
+        {"\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x9d\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91\xe2\x95\x9a\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x9d\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91   \xe2\x96\x88\xe2\x96\x88\xe2\x95\x91", CYAN},
+        {"\xe2\x95\x9a\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x9d \xe2\x95\x9a\xe2\x95\x90\xe2\x95\x9d \xe2\x95\x9a\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x9d \xe2\x95\x9a\xe2\x95\x90\xe2\x95\x9d   \xe2\x95\x9a\xe2\x95\x90\xe2\x95\x9d", DGRAY},
         {"", WHITE},
-        {"  _____               _             ", MAGENTA},
-        {" |_   _| __ __ _  ___| | _____ _ __ ", MAGENTA},
-        {"   | || '__/ _` |/ __| |/ / _ \\ '__|", MAGENTA},
-        {"   | || | | (_| | (__|   <  __/ |  ", MAGENTA},
-        {"   |_||_|  \\__,_|\\___|_|\\_\\___|_|  ", MAGENTA},
+        {"\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97  \xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97  \xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97  \xe2\x96\x88\xe2\x96\x88\xe2\x95\x97\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97", MAGENTA},
+        {"\xe2\x95\x9a\xe2\x95\x90\xe2\x95\x90\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x95\x9d\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x9d\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91 \xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x9d\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x9d\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97", MAGENTA},
+        {"   \xe2\x96\x88\xe2\x96\x88\xe2\x95\x91   \xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x9d\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91     \xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x9d \xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x9d  \xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x9d", MAGENTA},
+        {"   \xe2\x96\x88\xe2\x96\x88\xe2\x95\x91   \xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97\xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91     \xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x90\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97 \xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x95\x9d  \xe2\x96\x88\xe2\x96\x88\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97", MAGENTA},
+        {"   \xe2\x96\x88\xe2\x96\x88\xe2\x95\x91   \xe2\x96\x88\xe2\x96\x88\xe2\x95\x91  \xe2\x96\x88\xe2\x96\x88\xe2\x95\x91\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91  \xe2\x96\x88\xe2\x96\x88\xe2\x95\x91\xe2\x95\x9a\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x97\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91  \xe2\x96\x88\xe2\x96\x88\xe2\x95\x97\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91\xe2\x96\x88\xe2\x96\x88\xe2\x95\x91  \xe2\x96\x88\xe2\x96\x88\xe2\x95\x91", MAGENTA},
+        {"   \xe2\x95\x9a\xe2\x95\x90\xe2\x95\x9d   \xe2\x95\x9a\xe2\x95\x90\xe2\x95\x9d  \xe2\x95\x9a\xe2\x95\x90\xe2\x95\x9d\xe2\x95\x9a\xe2\x95\x90\xe2\x95\x9d  \xe2\x95\x9a\xe2\x95\x90\xe2\x95\x9d \xe2\x95\x9a\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x9d\xe2\x95\x9a\xe2\x95\x90\xe2\x95\x9d  \xe2\x95\x9a\xe2\x95\x90\xe2\x95\x9d\xe2\x95\x9a\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x9d\xe2\x95\x9a\xe2\x95\x90\xe2\x95\x9d  \xe2\x95\x9a\xe2\x95\x90\xe2\x95\x9d", DGRAY},
     };
-    int start = (H - (int)art.size() - 10) / 2;
+
+    // For centering: use a fixed visual width reference (longest visible line ~60 chars wide visually)
+    // The block chars are multi-byte but visually 1 wide each — use a fixed 62 as reference
+    int refW = 62;
+    int start = (H - (int)art.size() - 9) / 2;
     if (start < 1)
         start = 1;
+    int w = CW();
     for (int i = 0; i < (int)art.size(); i++)
     {
         gotoxy(0, start + i);
         clrLine(start + i);
-        int w = CW(), pad = (w - (int)art[i].first.size()) / 2;
-        if (pad > 0)
+        if (!art[i].first.empty())
+        {
+            int pad = (w - refW) / 2;
+            if (pad < 0)
+                pad = 0;
             std::cout << std::string(pad, ' ');
-        sc(art[i].second);
-        std::cout << art[i].first;
-        rc();
+            sc(art[i].second);
+            std::cout << art[i].first;
+            rc();
+        }
         std::cout << std::flush;
-        ms(50);
+        ms(40);
     }
     ms(300);
     int br = start + (int)art.size();
     gotoxy(0, br + 1);
-    cprt("=================================================================", DGRAY);
+    cprt("═══════════════════════════════════════════════════════════════", DGRAY);
     gotoxy(0, br + 2);
-    cprt("  Local & Online  |  Swertres 3D  |  Full History Sync  ", DGRAY);
+    cprt("  Local + Online  |  Swertres 3D  |  Auto-Sync  ", DGRAY);
     gotoxy(0, br + 3);
-    cprt("=================================================================", DGRAY);
+    cprt("═══════════════════════════════════════════════════════════════", DGRAY);
     ms(300);
     gotoxy(0, br + 5);
     cprt("  >> 3D Lotto  2PM  5PM  9PM  |  lottopcso.com  <<  ", GREEN);
@@ -769,9 +898,10 @@ void showIntro()
     gotoxy(2, br + 7);
     showLoad("Initializing System", 1400);
     gotoxy(0, br + 8);
-    int w2 = CW(), pad = (w2 - 30) / 2;
-    if (pad > 0)
-        std::cout << std::string(pad, ' ');
+    int pad2 = (w - 32) / 2;
+    if (pad2 < 0)
+        pad2 = 0;
+    std::cout << std::string(pad2, ' ');
     sc(WHITE);
     std::cout << "Press ";
     sc(YELLOW);
@@ -882,104 +1012,7 @@ bool confirmDlg(const std::string &action)
 }
 
 // ════════════════════════════════════════════════════
-//  SUB-MENU A: Local / Online / Help / Back
-// ════════════════════════════════════════════════════
-int subMenu(const std::string &name, const std::string &helpText)
-{
-    int sr = gpos().Y;
-    auto draw = [&](int hi)
-    {
-        gotoxy(0, sr);
-        clrLine(sr);
-        sc(CYAN);
-        std::cout << "  [ " << name << " ]";
-        rc();
-        const char *opts[] = {"[1] Continue Local", "[2] Continue Online", "[3] Help", "[4] Back"};
-        for (int i = 0; i < 4; i++)
-        {
-            clrLine(sr + 1 + i);
-            gotoxy(0, sr + 1 + i);
-            std::cout << "  ";
-            if (i == hi)
-            {
-                sc(CYAN);
-                std::cout << "-> " << opts[i];
-            }
-            else
-            {
-                sc(DGRAY);
-                std::cout << "   " << opts[i];
-            }
-            rc();
-        }
-        clrLine(sr + 5);
-        gotoxy(0, sr + 5);
-        sc(DGRAY);
-        std::cout << "  Press 1 / 2 / 3 / 4";
-        rc();
-    };
-    draw(-1);
-    while (true)
-    {
-        int k = rk();
-        if (k == '1')
-        {
-            draw(0);
-            ms(120);
-            for (int r = sr; r <= sr + 5; r++)
-                clrLine(r);
-            gotoxy(0, sr);
-            return 0;
-        }
-        if (k == '2')
-        {
-            draw(1);
-            ms(120);
-            for (int r = sr; r <= sr + 5; r++)
-                clrLine(r);
-            gotoxy(0, sr);
-            return 1;
-        }
-        if (k == '3')
-        {
-            gotoxy(0, sr);
-            clrLine(sr);
-            sc(YELLOW);
-            std::cout << "  HELP - " << name;
-            rc();
-            std::istringstream hs(helpText);
-            std::string hl2;
-            int hr = sr + 1;
-            while (std::getline(hs, hl2))
-            {
-                clrLine(hr);
-                gotoxy(0, hr);
-                sc(WHITE);
-                std::cout << hl2;
-                rc();
-                hr++;
-            }
-            clrLine(hr);
-            gotoxy(0, hr);
-            sc(DGRAY);
-            std::cout << "  Press any key to go back...";
-            rc();
-            rk();
-            draw(-1);
-            continue;
-        }
-        if (k == '4' || k == KX)
-        {
-            for (int r = sr; r <= sr + 5; r++)
-                clrLine(r);
-            gotoxy(0, sr);
-            return -1;
-        }
-    }
-}
-
-// ════════════════════════════════════════════════════
-//  SUB-MENU B: Continue / Help / Back
+//  SUB-MENU: Continue / Help / Back
 // ════════════════════════════════════════════════════
 bool subMenu2(const std::string &name, const std::string &helpText)
 {
@@ -1222,9 +1255,9 @@ void doSyncDB()
     std::string help =
         "  Fetches 3D Lotto results from lottopcso.com\n"
         "  and stores them in digit_data.txt.\n\n"
-        "  Choose: specific year, range, or all years.\n"
-        "  Duplicate entries are skipped automatically.\n"
-        "  Requires internet connection.\n";
+        "  Auto-Sync already fetches today's draws.\n"
+        "  Use this for bulk-fetching older years.\n\n"
+        "  Duplicate entries are skipped.\n";
     if (!subMenu2("SYNC DB", help))
     {
         cls();
@@ -1333,323 +1366,924 @@ void doSyncDB()
 }
 
 // ════════════════════════════════════════════════════
-//  SEARCH
+//  S-R-W — STRONG / RANDOM / WEAK
 // ════════════════════════════════════════════════════
-void doSearchLocal()
+// ════════════════════════════════════════════════════
+//  S-R-W  STRONG / RANDOM / WEAK
+//
+//  ALGORITHM — "1 out of 1000" pattern model:
+//
+//  Step 1: 35-draw rolling window (current month pattern)
+//    Count each digit 0-9 across all 3 positions
+//    (35 draws × 3 positions = up to 105 digit slots)
+//    digit_freq[d] = count[d] / total_slots
+//
+//  Step 2: Per-combo pattern score
+//    For combo a-b-c:
+//      pattern_score = digit_freq[a] × digit_freq[b]
+//                    × digit_freq[c] × 1000
+//    Meaning: expected appearances per 1000 draws
+//    if digits were drawn at observed frequencies.
+//
+//  Step 3: Blend with all-time history
+//    hist_score    = (all_time_hits / total_draws) × 1000
+//    final_score   = 0.7 × pattern_score
+//                  + 0.3 × hist_score
+//
+//  Step 4: Classify (relative to median combo score)
+//    STRONG   ≥ median × 2.0   (far above average)
+//    RANDOM   ≥ median × 0.5   (near average)
+//    WEAK     <  median × 0.5  (far below average)
+//
+//  Step 5: "Strongest" = top 10 by final_score
+//    These represent combos with the highest joint
+//    probability based on the current digit pattern.
+//
+//  ONE NUMBER section: same digit_freq logic —
+//    digit_score[d] = digit_freq[d] × 3 × 1000
+//    (expected appearances per 1000 draws across 3 slots)
+// ════════════════════════════════════════════════════
+
+enum SRW_Class
 {
-    std::cout << "\n";
-    std::string digit = inp("  Digit combo (e.g. 5-9-2): ");
-    std::string date = inp("  Date  (YYYY-MM-DD)      : ");
-    std::string t = inp("  Time  (2pm/5pm/9pm)     : ");
-    std::cout << "\n";
-    if (!vtm(t))
-    {
-        sc(RED);
-        std::cout << "  Invalid time.\n";
-        rc();
-        std::cout << "\n  Press any key...\n";
-        rk();
-        cls();
+    STRONG,
+    RANDOM,
+    WEAK
+};
+
+struct SRWEntry
+{
+    std::string combo;
+    double score;     // final blended score (per-1000)
+    double patScore;  // pattern score (per-1000)
+    double histScore; // historical score (per-1000)
+    int oneInN;       // "1 in N" inverse probability
+    int totalHits;    // all-time appearances
+    int recentHits;   // appearances in last 35 draws
+    SRW_Class cls;
+};
+
+// ── Compute digit frequencies from last N draws ──────
+// Fills freq[0..9] with per-slot probability
+// window_size: how many draws to use (default 35)
+static void calcDigitFreq(const std::vector<Entry> &sorted,
+                          double freq[10], int window_size = 35)
+{
+    for (int d = 0; d < 10; d++)
+        freq[d] = 0.0;
+    int W = std::min(window_size, (int)sorted.size());
+    if (W == 0)
         return;
-    }
-    if (!confirmDlg("Search LOCAL: " + digit + " | " + date + " | " + t))
+    for (int i = 0; i < W; i++)
     {
-        cls();
-        return;
-    }
-    pulse("Searching local database", 2);
-    auto data = loadDB();
-    bool found = false;
-    for (const auto &e : data)
-        if (trimS(e.digit) == trimS(digit) && e.date == date && e.time == t)
+        const std::string &dg = sorted[i].digit;
+        if ((int)dg.size() >= 5)
         {
-            found = true;
-            std::cout << "\n";
-            hl('-', GREEN);
-            sc(GREEN);
-            std::cout << "  [v] FOUND  [LOCAL]\n";
-            rc();
-            sc(WHITE);
-            std::cout << "  Digit : ";
-            sc(YELLOW);
-            std::cout << e.digit;
-            rc();
-            std::cout << "\n";
-            sc(WHITE);
-            std::cout << "  Date  : ";
-            sc(CYAN);
-            std::cout << e.date;
-            rc();
-            std::cout << "\n";
-            sc(WHITE);
-            std::cout << "  Time  : ";
-            sc(MAGENTA);
-            std::cout << e.time;
-            rc();
-            std::cout << "\n";
-            hl('-', GREEN);
-            break;
+            int a = dg[0] - '0', b = dg[2] - '0', c = dg[4] - '0';
+            if (a >= 0 && a <= 9)
+                freq[a]++;
+            if (b >= 0 && b <= 9)
+                freq[b]++;
+            if (c >= 0 && c <= 9)
+                freq[c]++;
         }
-    if (!found)
-    {
-        std::cout << "\n";
-        hl('-', RED);
-        sc(RED);
-        std::cout << "  [x] NOT FOUND  [LOCAL]\n";
-        rc();
-        sc(DGRAY);
-        std::cout << "  No matching record.\n";
-        rc();
-        hl('-', RED);
     }
+    double slots = W * 3.0;
+    for (int d = 0; d < 10; d++)
+        freq[d] /= slots;
+}
+
+std::vector<SRWEntry> computeSRW(const std::vector<Entry> &sorted)
+{
+    int total = (int)sorted.size();
+    // All-time hit counts
+    std::map<std::string, int> allCount;
+    for (const auto &e : sorted)
+        allCount[trimS(e.digit)]++;
+    // Last-35 hit counts for display
+    int W = std::min(35, total);
+    std::map<std::string, int> win35;
+    for (int i = 0; i < W; i++)
+        win35[trimS(sorted[i].digit)]++;
+    // Digit frequencies from 35-draw window
+    double freq[10];
+    calcDigitFreq(sorted, freq, 35);
+
+    std::vector<SRWEntry> result;
+    result.reserve(1000);
+    for (int a = 0; a <= 9; a++)
+        for (int b = 0; b <= 9; b++)
+            for (int c = 0; c <= 9; c++)
+            {
+                std::string combo = std::to_string(a) + "-" + std::to_string(b) + "-" + std::to_string(c);
+                int th = (allCount.count(combo) ? allCount.at(combo) : 0);
+                int rh = (win35.count(combo) ? win35.at(combo) : 0);
+                double pat = freq[a] * freq[b] * freq[c] * 1000.0;
+                double hist = (total > 0) ? (double)th / total * 1000.0 : 0.0;
+                double score = 0.7 * pat + 0.3 * hist;
+                int oneInN = (score > 1e-9) ? (int)std::round(1000.0 / score) : 9999;
+                if (oneInN < 1)
+                    oneInN = 1;
+                if (oneInN > 9999)
+                    oneInN = 9999;
+                SRWEntry e;
+                e.combo = combo;
+                e.score = score;
+                e.patScore = pat;
+                e.histScore = hist;
+                e.oneInN = oneInN;
+                e.totalHits = th;
+                e.recentHits = rh;
+                e.cls = RANDOM;
+                result.push_back(e);
+            }
+    // Classification by median
+    std::vector<double> sv;
+    sv.reserve(1000);
+    for (const auto &e : result)
+        sv.push_back(e.score);
+    std::sort(sv.begin(), sv.end());
+    double median = sv[sv.size() / 2];
+    double strongT = median * 2.0, weakT = median * 0.5;
+    for (auto &e : result)
+    {
+        if (e.score >= strongT)
+            e.cls = STRONG;
+        else if (e.score >= weakT)
+            e.cls = RANDOM;
+        else
+            e.cls = WEAK;
+    }
+    // Sort: Strong first, then by score desc within class
+    std::sort(result.begin(), result.end(), [](const SRWEntry &a, const SRWEntry &b)
+              {
+        if(a.cls!=b.cls)return(int)a.cls<(int)b.cls;
+        return a.score>b.score; });
+    return result;
+}
+
+int srwColor(SRW_Class c)
+{
+    if (c == STRONG)
+        return RED;
+    if (c == RANDOM)
+        return GREEN;
+    return DGRAY;
+}
+const char *srwLabel(SRW_Class c)
+{
+    if (c == STRONG)
+        return "STRONG";
+    if (c == RANDOM)
+        return "RANDOM";
+    return "WEAK  ";
+}
+
+static void printOneInN(int n)
+{
+    if (n >= 9999)
+        std::cout << "1 in >9999";
+    else
+        std::cout << "1 in " << std::setw(5) << std::left << n;
+}
+
+// ── Search: look up a single combo ───────────────────
+static void doSRWSearch(const std::vector<SRWEntry> &srw)
+{
+    cls();
+    std::cout << "\n";
+    hl('=', RED);
+    sc(RED);
+    std::cout << "  [ S-R-W — SEARCH COMBO ]\n";
+    rc();
+    hl('-', DGRAY);
+    std::cout << "\n";
+    sc(DGRAY);
+    std::cout << "  Type a combo to check its class and 1-in-N probability.\n";
+    std::cout << "  Format: 5-9-2  or  592   |  blank = back\n\n";
+    rc();
+    hl('-', DGRAY);
+    while (true)
+    {
+        sc(WHITE);
+        std::cout << "  Combo (blank=back): ";
+        rc();
+        std::string raw = inp("");
+        if (raw.empty())
+        {
+            cls();
+            return;
+        }
+        std::string combo = normalizeDigit(raw);
+        if (combo.empty())
+        {
+            sc(RED);
+            std::cout << "  Invalid — use 5-9-2 or 592.\n";
+            rc();
+            continue;
+        }
+        if (combo != raw)
+        {
+            sc(DGRAY);
+            std::cout << "  -> ";
+            sc(YELLOW);
+            std::cout << combo;
+            rc();
+            std::cout << "\n";
+        }
+        // Locate in sorted srw list (any position)
+        const SRWEntry *found = nullptr;
+        int rank = 0;
+        for (int i = 0; i < (int)srw.size(); i++)
+        {
+            if (srw[i].combo == combo)
+            {
+                found = &srw[i];
+                rank = i + 1;
+                break;
+            }
+        }
+        if (!found)
+        {
+            sc(RED);
+            std::cout << "  Not found.\n";
+            rc();
+            continue;
+        }
+        const SRWEntry &e = *found;
+        std::cout << "\n";
+        hl('=', srwColor(e.cls));
+        sc(srwColor(e.cls));
+        std::cout << "  " << e.combo;
+        sc(WHITE);
+        std::cout << "   CLASS: ";
+        sc(srwColor(e.cls));
+        std::cout << srwLabel(e.cls);
+        rc();
+        std::cout << "\n";
+        hl('-', DGRAY);
+        sc(WHITE);
+        std::cout << "  Rank (global)    : ";
+        sc(YELLOW);
+        std::cout << "#" << rank << " of 1000\n";
+        rc();
+        sc(WHITE);
+        std::cout << "  Score (per 1000) : ";
+        sc(YELLOW);
+        std::cout << std::fixed << std::setprecision(5) << e.score << "\n";
+        rc();
+        sc(WHITE);
+        std::cout << "  Probability      : ";
+        sc(srwColor(e.cls));
+        printOneInN(e.oneInN);
+        rc();
+        std::cout << "\n";
+        sc(WHITE);
+        std::cout << "  Pattern (35-drw) : ";
+        sc(CYAN);
+        std::cout << std::fixed << std::setprecision(5) << e.patScore << "\n";
+        rc();
+        sc(WHITE);
+        std::cout << "  History (all-t)  : ";
+        sc(DGRAY);
+        std::cout << std::fixed << std::setprecision(5) << e.histScore << "\n";
+        rc();
+        sc(WHITE);
+        std::cout << "  All-time hits    : ";
+        sc(DGRAY);
+        std::cout << e.totalHits << "\n";
+        rc();
+        sc(WHITE);
+        std::cout << "  Last 35 draws    : ";
+        sc(e.recentHits > 0 ? CYAN : DGRAY);
+        std::cout << e.recentHits << "\n";
+        rc();
+        hl('=', srwColor(e.cls));
+        std::cout << "\n  Search another (blank=back):\n\n";
+    }
+}
+
+// ── SRW Digits display ───────────────────────────────
+// filter: -1=All  0=Strong  1=Random  2=Weak  3=Strongest(top10)
+void doSRWDigits(const std::vector<Entry> &sorted, int filter = -1)
+{
+    cls();
+    std::cout << "\n";
+    hl('=', RED);
+    sc(RED);
+    if (filter == -1)
+        std::cout << "  [ S-R-W DIGITS — ALL ]\n";
+    else if (filter == 0)
+        std::cout << "  [ S-R-W DIGITS — STRONG ]\n";
+    else if (filter == 1)
+        std::cout << "  [ S-R-W DIGITS — RANDOM ]\n";
+    else if (filter == 2)
+        std::cout << "  [ S-R-W DIGITS — WEAK ]\n";
+    else
+        std::cout << "  [ S-R-W DIGITS — STRONGEST TOP 10 ]\n";
+    rc();
+    hl('-', DGRAY);
+    std::cout << "\n";
+    sc(DGRAY);
+    std::cout << "  Computing 35-draw pattern scores...";
+    rc();
+    std::cout << std::flush;
+    auto srw = computeSRW(sorted);
+    clrLine(gpos().Y);
+    gotoxy(0, gpos().Y);
+
+    int ns = 0, nr = 0, nw = 0;
+    for (const auto &e : srw)
+    {
+        if (e.cls == STRONG)
+            ns++;
+        else if (e.cls == RANDOM)
+            nr++;
+        else
+            nw++;
+    }
+
+    // Build view list
+    std::vector<const SRWEntry *> view;
+    if (filter == 3)
+    {
+        // True top 10 by score regardless of class
+        std::vector<const SRWEntry *> all;
+        all.reserve(1000);
+        for (const auto &e : srw)
+            all.push_back(&e);
+        std::sort(all.begin(), all.end(), [](const SRWEntry *a, const SRWEntry *b)
+                  { return a->score > b->score; });
+        int lim = std::min(10, (int)all.size());
+        for (int i = 0; i < lim; i++)
+            view.push_back(all[i]);
+    }
+    else
+    {
+        for (const auto &e : srw)
+        {
+            if (filter == -1)
+                view.push_back(&e);
+            else if (filter == 0 && e.cls == STRONG)
+                view.push_back(&e);
+            else if (filter == 1 && e.cls == RANDOM)
+                view.push_back(&e);
+            else if (filter == 2 && e.cls == WEAK)
+                view.push_back(&e);
+        }
+    }
+
+    std::cout << "\n";
+    hl('=', RED);
+    sc(RED);
+    std::cout << "  STRONG ";
+    sc(WHITE);
+    std::cout << ns;
+    sc(DGRAY);
+    std::cout << "   |   ";
+    sc(GREEN);
+    std::cout << "RANDOM ";
+    sc(WHITE);
+    std::cout << nr;
+    sc(DGRAY);
+    std::cout << "   |   ";
+    sc(DGRAY);
+    std::cout << "WEAK ";
+    sc(WHITE);
+    std::cout << nw;
+    rc();
+    std::cout << "\n";
+    sc(DGRAY);
+    std::cout << "  PER-1000 = expected hits per 1000 draws (35-draw pattern + history)\n";
+    std::cout << "  Top 5 marked *\n";
+    rc();
+    hl('-', DGRAY);
+    sc(DGRAY);
+    std::cout << "  " << std::left
+              << std::setw(6) << "RANK"
+              << std::setw(9) << "COMBO"
+              << std::setw(9) << "CLASS"
+              << std::setw(12) << "PER-1000"
+              << std::setw(12) << "1-IN-N"
+              << std::setw(10) << "ALL-HITS"
+              << std::setw(9) << "35-WIN"
+              << "\n";
+    rc();
+    hl('-', DGRAY);
+
+    SRW_Class lastCls = (SRW_Class)-1;
+    int shown = 0;
+    for (int idx = 0; idx < (int)view.size(); idx++)
+    {
+        const SRWEntry &e = *view[idx];
+        bool top5 = (idx < 5);
+
+        // Group header for "All" view
+        if (filter == -1 && e.cls != lastCls)
+        {
+            if (lastCls != (SRW_Class)-1)
+                std::cout << "\n";
+            sc(srwColor(e.cls));
+            std::cout << "  ── " << srwLabel(e.cls) << " ────────────────────────────────────\n";
+            rc();
+            lastCls = e.cls;
+        }
+
+        int col = top5 ? YELLOW : srwColor(e.cls);
+        sc(col);
+        std::string nin = (e.oneInN >= 9999) ? "1in>9999" : ("1in" + std::to_string(e.oneInN));
+        std::cout << "  " << std::left
+                  << std::setw(6) << (idx + 1)
+                  << std::setw(9) << e.combo
+                  << std::setw(9) << srwLabel(e.cls)
+                  << std::fixed << std::setprecision(5) << std::setw(12) << e.score
+                  << std::setw(12) << nin;
+        sc(DGRAY);
+        std::cout << std::setw(10) << e.totalHits << std::setw(9) << e.recentHits;
+        if (top5)
+        {
+            sc(YELLOW);
+            std::cout << " *";
+        }
+        rc();
+        std::cout << "\n";
+        shown++;
+        if (shown % 40 == 0 && filter != 3)
+        {
+            sc(DGRAY);
+            std::cout << "  -- " << shown << "/" << (int)view.size() << "  [Space/Enter=next  Q=stop] --";
+            rc();
+            int k = rk();
+            if (k == 'q' || k == 'Q')
+                break;
+        }
+    }
+    hl('=', RED);
+    if (filter == 3)
+    {
+        sc(RED);
+        std::cout << "  TOP 10 STRONGEST — highest joint digit pattern probability\n";
+        rc();
+    }
+    sc(YELLOW);
+    std::cout << "  * = Top 5 in this view\n";
+    rc();
+    sc(DGRAY);
+    std::cout << "  " << shown << " combos shown. Score = 70% 35-draw pattern + 30% all-time.\n";
+    rc();
+    std::cout << "\n  [1] Search a combo   [2] Back\n  ";
+    sc(DGRAY);
+    std::cout << "Press 1 or 2: ";
+    rc();
+    while (true)
+    {
+        int k = rk();
+        if (k == '1')
+        {
+            doSRWSearch(srw);
+        }
+        else if (k == '2' || k == KX)
+        {
+            cls();
+            return;
+        }
+    }
+}
+
+// ── SRW One Number — per-digit 35-draw frequency ─────
+void doSRWOneNumber(const std::vector<Entry> &sorted)
+{
+    cls();
+    std::cout << "\n";
+    hl('=', RED);
+    sc(RED);
+    std::cout << "  [ S-R-W ONE NUMBER ]\n";
+    rc();
+    hl('-', DGRAY);
+    std::cout << "\n";
+    sc(DGRAY);
+    std::cout << "  Computing digit frequency in last 35 draws...";
+    rc();
+    std::cout << std::flush;
+
+    int total = (int)sorted.size();
+    int W = std::min(35, total);
+    // Per-digit counts in 35-draw window
+    int cnt35[10] = {};
+    int cntAll[10] = {};
+    for (int i = 0; i < W; i++)
+    {
+        const std::string &dg = trimS(sorted[i].digit);
+        if ((int)dg.size() >= 5)
+        {
+            int a = dg[0] - '0', b = dg[2] - '0', c = dg[4] - '0';
+            if (a >= 0 && a <= 9)
+                cnt35[a]++;
+            if (b >= 0 && b <= 9)
+                cnt35[b]++;
+            if (c >= 0 && c <= 9)
+                cnt35[c]++;
+        }
+    }
+    for (const auto &e : sorted)
+    {
+        const std::string &dg = trimS(e.digit);
+        if ((int)dg.size() >= 5)
+        {
+            int a = dg[0] - '0', b = dg[2] - '0', c = dg[4] - '0';
+            if (a >= 0 && a <= 9)
+                cntAll[a]++;
+            if (b >= 0 && b <= 9)
+                cntAll[b]++;
+            if (c >= 0 && c <= 9)
+                cntAll[c]++;
+        }
+    }
+    int slots35 = W * 3, slotsAll = total * 3;
+    double freq[10];
+    calcDigitFreq(sorted, freq, 35);
+
+    struct ND
+    {
+        int d, c35, cAll;
+        double freq35, score;
+        int oneInN;
+        SRW_Class cls;
+    };
+    ND nums[10];
+    for (int d = 0; d < 10; d++)
+    {
+        double f35 = freq[d];
+        double fAll = (slotsAll > 0) ? (double)cntAll[d] / slotsAll : 0.0;
+        // Expected appearances per 1000 draws (across 3 positions)
+        double pat = f35 * 3.0 * 1000.0;
+        double hist = fAll * 3.0 * 1000.0;
+        double score = 0.7 * pat + 0.3 * hist;
+        // Classify: uniform baseline = 300 per 1000
+        SRW_Class cls;
+        if (score >= 360)
+            cls = STRONG; // >20% above uniform
+        else if (score >= 240)
+            cls = RANDOM; // within ±20%
+        else
+            cls = WEAK;
+        int oin = (score > 1e-9) ? (int)std::round(1000.0 / score) : 9999;
+        if (oin < 1)
+            oin = 1;
+        if (oin > 9999)
+            oin = 9999;
+        nums[d] = {d, cnt35[d], cntAll[d], f35, score, oin, cls};
+    }
+    // Sort by score desc
+    std::sort(std::begin(nums), std::end(nums), [](const ND &a, const ND &b)
+              { return a.score > b.score; });
+
+    clrLine(gpos().Y);
+    gotoxy(0, gpos().Y);
+    std::cout << "\n";
+    hl('=', RED);
+    sc(DGRAY);
+    std::cout << "  How often each digit 0-9 appears across all 3 draw positions.\n";
+    std::cout << "  Window: last " << W << " draws = " << slots35 << " slots  |  Baseline: ~300 per 1000\n";
+    rc();
+    hl('-', DGRAY);
+    sc(DGRAY);
+    std::cout << "  " << std::left
+              << std::setw(5) << "RANK" << std::setw(8) << "DIGIT" << std::setw(9) << "CLASS"
+              << std::setw(12) << "PER-1000" << std::setw(10) << "1-IN-N"
+              << std::setw(9) << "35-WIN" << std::setw(12) << "35-FREQ%" << std::setw(12) << "ALL-TIME"
+              << "\n";
+    rc();
+    hl('-', DGRAY);
+
+    for (int i = 0; i < 10; i++)
+    {
+        const ND &e = nums[i];
+        bool top5 = (i < 5);
+        int col = top5 ? YELLOW : srwColor(e.cls);
+        sc(col);
+        std::string nin = (e.oneInN >= 9999) ? "1in>9999" : ("1in" + std::to_string(e.oneInN));
+        std::cout << "  " << std::left
+                  << std::setw(5) << (i + 1) << std::setw(8) << e.d
+                  << std::setw(9) << srwLabel(e.cls)
+                  << std::fixed << std::setprecision(2) << std::setw(12) << e.score
+                  << std::setw(10) << nin
+                  << std::setw(9) << e.c35
+                  << std::setw(12) << std::fixed << std::setprecision(2) << (e.freq35 * 100.0);
+        sc(DGRAY);
+        std::cout << std::setw(12) << e.cAll;
+        if (top5)
+        {
+            sc(YELLOW);
+            std::cout << " *";
+        }
+        rc();
+        std::cout << "\n";
+    }
+    hl('=', RED);
+    sc(YELLOW);
+    std::cout << "  * = Top 5 most active digits in 35-draw pattern\n";
+    rc();
+    sc(DGRAY);
+    std::cout << "  STRONG >= 360   RANDOM 240-359   WEAK < 240  (per 1000 draws)\n";
+    std::cout << "  TIP: Cross these digits with S-R-W Digits to find strong combos.\n";
+    sc(YELLOW);
+    std::cout << "  Pattern guide — NOT a prediction.\n";
+    rc();
     std::cout << "\n  Press any key...\n";
     rk();
     cls();
 }
-void doSearchOnline()
+
+void doSRW()
 {
+    cls();
     std::cout << "\n";
-    std::string digit = inp("  Digit combo (e.g. 5-9-2)  : ");
-    std::string date = inp("  Date (e.g. Mar 4, 2026)   : ");
-    std::string t = inp("  Time  (2pm/5pm/9pm)        : ");
+    hl('=', RED);
+    sc(RED);
+    std::cout << "  [ S-R-W  STRONG · RANDOM · WEAK ]\n";
+    rc();
+    hl('-', DGRAY);
     std::cout << "\n";
-    if (!vtm(t))
+    std::string help =
+        "  S-R-W — 1 out of 1000 pattern model\n\n"
+        "  Uses the last 35 draws as a pattern window\n"
+        "  to score all 1000 combos and all 10 digits.\n\n"
+        "  ALGORITHM:\n"
+        "  1. Count digit 0-9 freq across all 3 positions\n"
+        "     in last 35 draws (up to 105 digit slots)\n"
+        "  2. combo_score = freq[a]*freq[b]*freq[c]*1000\n"
+        "  3. final = 70% pattern + 30% all-time history\n\n"
+        "  CLASSIFICATION (vs median combo score):\n"
+        "  STRONG  score >= 2x median\n"
+        "  RANDOM  0.5x to 2x median\n"
+        "  WEAK    below 0.5x median\n\n"
+        "  [1] S-R-W Digits:\n"
+        "      Search / All / Strong / Random\n"
+        "      Weak / Strongest (top 10)\n"
+        "  [2] S-R-W One Number:\n"
+        "      Each digit 0-9 ranked by 35-draw freq\n\n"
+        "  Pattern guide — NOT a prediction tool.\n";
+
+    int sr = gpos().Y;
+    auto drawSRW = [&](int hi)
     {
+        gotoxy(0, sr);
+        clrLine(sr);
         sc(RED);
-        std::cout << "  Invalid time.\n";
+        std::cout << "  [ S-R-W ]";
         rc();
-        std::cout << "\n  Press any key...\n";
-        rk();
-        cls();
-        return;
-    }
-    int targetYear = 0;
-    for (int i = 0; i < (int)date.size() - 3; i++)
-        if (isdigit(date[i]) && isdigit(date[i + 1]) && isdigit(date[i + 2]) && isdigit(date[i + 3]))
+        const char *opts[] = {"[1] S-R-W Digits", "[2] S-R-W One Number", "[3] Help", "[4] Back"};
+        const char *desc[] = {
+            "  Search / All / Strong / Random / Weak / Strongest",
+            "  Digits 0-9 ranked by 35-draw pattern",
+            "  How the algorithm works",
+            "  Return to main menu"};
+        for (int i = 0; i < 4; i++)
         {
-            targetYear = std::stoi(date.substr(i, 4));
+            clrLine(sr + 1 + i);
+            gotoxy(0, sr + 1 + i);
+            std::cout << "  ";
+            if (i == hi)
+            {
+                sc(RED);
+                std::cout << "-> " << opts[i];
+                sc(DGRAY);
+                std::cout << desc[i];
+            }
+            else
+            {
+                sc(DGRAY);
+                std::cout << "   " << opts[i] << desc[i];
+            }
+            rc();
+        }
+        clrLine(sr + 5);
+        gotoxy(0, sr + 5);
+        sc(DGRAY);
+        std::cout << "  Press 1 / 2 / 3 / 4";
+        rc();
+    };
+    drawSRW(-1);
+    int choice = 0;
+    while (true)
+    {
+        int k = rk();
+        if (k == '1')
+        {
+            drawSRW(0);
+            ms(120);
+            for (int r = sr; r <= sr + 5; r++)
+                clrLine(r);
+            gotoxy(0, sr);
+            choice = 1;
             break;
         }
-    if (targetYear < 2009)
-    {
-        sc(RED);
-        std::cout << "  Could not find year. Use: Mar 4, 2026\n";
-        rc();
-        std::cout << "\n  Press any key...\n";
-        rk();
-        cls();
-        return;
+        if (k == '2')
+        {
+            drawSRW(1);
+            ms(120);
+            for (int r = sr; r <= sr + 5; r++)
+                clrLine(r);
+            gotoxy(0, sr);
+            choice = 2;
+            break;
+        }
+        if (k == '3')
+        {
+            gotoxy(0, sr);
+            clrLine(sr);
+            sc(YELLOW);
+            std::cout << "  HELP - S-R-W";
+            rc();
+            std::istringstream hs(help);
+            std::string hl2;
+            int hr = sr + 1;
+            while (std::getline(hs, hl2))
+            {
+                clrLine(hr);
+                gotoxy(0, hr);
+                sc(WHITE);
+                std::cout << hl2;
+                rc();
+                hr++;
+            }
+            clrLine(hr);
+            gotoxy(0, hr);
+            sc(DGRAY);
+            std::cout << "  Press any key...";
+            rc();
+            rk();
+            drawSRW(-1);
+            continue;
+        }
+        if (k == '4' || k == KX)
+        {
+            for (int r = sr; r <= sr + 5; r++)
+                clrLine(r);
+            gotoxy(0, sr);
+            cls();
+            return;
+        }
     }
-    if (!confirmDlg("Search ONLINE: " + digit + " | " + date + " | " + t))
-    {
-        cls();
-        return;
-    }
-    sc(DGRAY);
-    std::cout << "  Checking connection...";
-    rc();
-    std::cout << std::flush;
-    if (!isOnline())
-    {
-        noInternet();
-        return;
-    }
-    int cy = getCurrentYear();
-    int lr = gpos().Y + 1;
+
+    // Load + sort newest-first
+    cls();
     std::cout << "\n";
-    gotoxy(2, lr);
-    sc(CYAN);
-    std::cout << "  Fetching year " << targetYear << "...";
+    hl('=', RED);
+    sc(RED);
+    std::cout << "  [ S-R-W — Loading ]\n";
     rc();
-    std::cout << std::flush;
-    auto entries = fetchYear(targetYear, cy);
-    clrLine(lr);
-    gotoxy(0, lr);
+    hl('-', DGRAY);
+    std::cout << "\n";
+    sc(DGRAY);
+    std::cout << "  Checking for new draws...\n";
+    rc();
+    tryAutoSync(true);
+    pulse("Loading and analyzing database", 2);
+    auto entries = loadDB();
     if (entries.empty())
     {
         sc(RED);
-        std::cout << "\n  Fetch failed.\n";
+        std::cout << "\n  No data. Run Sync DB first.\n";
         rc();
         std::cout << "\n  Press any key...\n";
         rk();
         cls();
         return;
     }
-    bool found = false;
-    for (const auto &e : entries)
-        if (trimS(e.digit) == trimS(digit) && e.time == t && e.date == date)
-        {
-            found = true;
-            std::cout << "\n";
-            hl('-', GREEN);
-            sc(GREEN);
-            std::cout << "  [v] FOUND  [ONLINE]\n";
-            rc();
-            sc(WHITE);
-            std::cout << "  Digit : ";
-            sc(YELLOW);
-            std::cout << e.digit;
-            rc();
-            std::cout << "\n";
-            sc(WHITE);
-            std::cout << "  Date  : ";
-            sc(CYAN);
-            std::cout << e.date;
-            rc();
-            std::cout << "\n";
-            sc(WHITE);
-            std::cout << "  Time  : ";
-            sc(MAGENTA);
-            std::cout << e.time;
-            rc();
-            std::cout << "\n";
-            hl('-', GREEN);
-            break;
-        }
-    if (!found)
+    auto slotOrd = [](const std::string &t) -> int
+    {if(t=="9pm")return 2;if(t=="5pm")return 1;return 0; };
+    std::sort(entries.begin(), entries.end(), [&](const Entry &a, const Entry &b)
+              {
+        int da=dateToInt(a.date),db=dateToInt(b.date);if(da!=db)return da>db;
+        return slotOrd(a.time)>slotOrd(b.time); });
+    int W = std::min(35, (int)entries.size());
+    sc(DGRAY);
+    std::cout << "  Total draws: ";
+    sc(CYAN);
+    std::cout << entries.size();
+    rc();
+    std::cout << "   Pattern window: ";
+    sc(YELLOW);
+    std::cout << W << " draws\n\n";
+    rc();
+
+    if (choice == 1)
     {
+        // Digits — filter sub-menu
+        cls();
         std::cout << "\n";
-        hl('-', RED);
+        hl('=', RED);
         sc(RED);
-        std::cout << "  [x] NOT FOUND  [ONLINE]\n";
+        std::cout << "  [ S-R-W DIGITS — View ]\n";
         rc();
+        hl('-', DGRAY);
+        std::cout << "\n";
         sc(DGRAY);
-        std::cout << "  Use exact format: 'Mar 4, 2026'\n";
+        std::cout << "  [1] Search         Look up a specific combo\n";
+        std::cout << "  [2] All            All 1000 combos (score desc)\n";
+        std::cout << "  [3] Strong         Score >= 2x median\n";
+        std::cout << "  [4] Random         0.5x to 2x median\n";
+        std::cout << "  [5] Weak           Below 0.5x median\n";
+        std::cout << "  [6] Strongest      Top 10 — highest probability\n";
+        std::cout << "  [7] Back\n\n";
         rc();
-        hl('-', RED);
+        hl('-', DGRAY);
+        sc(DGRAY);
+        std::cout << "  Press 1-7: ";
+        rc();
+        while (true)
+        {
+            int k = rk();
+            if (k == '1')
+            {
+                // Compute first, then hand off to search
+                cls();
+                std::cout << "\n";
+                hl('=', RED);
+                sc(RED);
+                std::cout << "  [ S-R-W — Computing ]\n";
+                rc();
+                sc(DGRAY);
+                std::cout << "  Building scores...";
+                rc();
+                std::cout << std::flush;
+                auto srw = computeSRW(entries);
+                clrLine(gpos().Y);
+                gotoxy(0, gpos().Y);
+                doSRWSearch(srw);
+                break;
+            }
+            if (k == '2')
+            {
+                doSRWDigits(entries, -1);
+                break;
+            }
+            if (k == '3')
+            {
+                doSRWDigits(entries, 0);
+                break;
+            }
+            if (k == '4')
+            {
+                doSRWDigits(entries, 1);
+                break;
+            }
+            if (k == '5')
+            {
+                doSRWDigits(entries, 2);
+                break;
+            }
+            if (k == '6')
+            {
+                doSRWDigits(entries, 3);
+                break;
+            }
+            if (k == '7' || k == KX)
+            {
+                cls();
+                return;
+            }
+        }
     }
-    std::cout << "\n  Press any key...\n";
-    rk();
-    cls();
+    else
+    {
+        doSRWOneNumber(entries);
+    }
 }
-void doSearch()
+
+void doShowAll()
 {
     cls();
     std::cout << "\n";
     hl('=', CYAN);
     sc(CYAN);
-    std::cout << "  [ SEARCH ]\n";
+    std::cout << "  [ SHOW ALL ]\n";
     rc();
     hl('-', DGRAY);
     std::cout << "\n";
-    std::string help = "  LOCAL:  Searches digit_data.txt.\n          Date format: YYYY-MM-DD\n  ONLINE: Fetches the specific year page.\n          Date format: Mar 4, 2026\n";
-    int c = subMenu("SEARCH", help);
-    if (c == -1)
+    std::string help =
+        "  Shows all records from digit_data.txt.\n"
+        "  Auto-syncs latest draws if online.\n"
+        "  Paginated 40 rows. Space=next, Q=stop.\n";
+    if (!subMenu2("SHOW ALL", help))
     {
         cls();
         return;
     }
-    if (c == 0)
-        doSearchLocal();
-    else
-        doSearchOnline();
-}
-
-// ════════════════════════════════════════════════════
-//  INSERT / EDIT
-// ════════════════════════════════════════════════════
-void doInsert()
-{
     cls();
     std::cout << "\n";
-    hl('=', MAGENTA);
-    sc(MAGENTA);
-    std::cout << "  [ INSERT / EDIT ]\n";
+    hl('=', CYAN);
+    sc(CYAN);
+    std::cout << "  [ SHOW ALL — Loading ]\n";
     rc();
     hl('-', DGRAY);
     std::cout << "\n";
-    std::string help = "  Enter date, time, and digit combo.\n  Existing entry for date+time is UPDATED.\n  Otherwise a NEW entry is created.\n";
-    if (!subMenu2("INSERT / EDIT", help))
-    {
-        cls();
-        return;
-    }
-    std::cout << "\n";
-    std::string date = inp("  Date  (YYYY-MM-DD)    : ");
-    std::string t = inp("  Time  (2pm/5pm/9pm)   : ");
-    std::string digit = inp("  Digit (e.g. 5-9-2)    : ");
-    std::cout << "\n";
-    if (!vtm(t))
-    {
-        sc(RED);
-        std::cout << "  Invalid time.\n";
-        rc();
-        std::cout << "\n  Press any key...\n";
-        rk();
-        cls();
-        return;
-    }
-    if (digit.empty())
-    {
-        sc(RED);
-        std::cout << "  Digit cannot be empty.\n";
-        rc();
-        std::cout << "\n  Press any key...\n";
-        rk();
-        cls();
-        return;
-    }
-    if (!confirmDlg("Save " + digit + " on " + date + " at " + t))
-    {
-        cls();
-        return;
-    }
-    pulse("Writing to database", 2);
-    auto data = loadDB();
-    bool upd = false;
-    for (auto &e : data)
-        if (e.date == date && e.time == t)
-        {
-            std::cout << "\n  ";
-            sc(YELLOW);
-            std::cout << "UPDATED";
-            rc();
-            std::cout << "  ";
-            sc(DGRAY);
-            std::cout << e.digit;
-            rc();
-            std::cout << " -> ";
-            sc(GREEN);
-            std::cout << digit;
-            rc();
-            std::cout << "\n";
-            e.digit = digit;
-            upd = true;
-            break;
-        }
-    if (!upd)
-    {
-        data.push_back({date, t, digit});
-        std::cout << "\n  ";
-        sc(GREEN);
-        std::cout << "INSERTED";
-        rc();
-        std::cout << "  ";
-        sc(YELLOW);
-        std::cout << digit;
-        rc();
-        std::cout << "  ";
-        sc(CYAN);
-        std::cout << date;
-        rc();
-        std::cout << "  ";
-        sc(MAGENTA);
-        std::cout << t;
-        rc();
-        std::cout << "\n";
-    }
-    saveDB(data);
-    hl('-', GREEN);
-    std::cout << "\n  Press any key...\n";
-    rk();
-    cls();
-}
-
-// ════════════════════════════════════════════════════
-//  SHOW ALL
-// ════════════════════════════════════════════════════
-void showTableLocal()
-{
+    sc(DGRAY);
+    std::cout << "  Checking for new draws...\n";
+    rc();
+    tryAutoSync(true);
     pulse("Loading local records", 2);
     auto data = loadDB();
     std::cout << "\n";
@@ -1698,107 +2332,6 @@ void showTableLocal()
         rc();
         std::cout << " records\n";
     }
-}
-void showTableOnline()
-{
-    sc(DGRAY);
-    std::cout << "\n  Checking connection...";
-    rc();
-    std::cout << std::flush;
-    if (!isOnline())
-    {
-        noInternet();
-        return;
-    }
-    int cy = getCurrentYear();
-    const int FY = 2009;
-    int total = cy - FY + 1, done = 0;
-    std::vector<DrawRow> all;
-    int lr = gpos().Y + 1;
-    std::cout << "\n";
-    for (int yr = cy; yr >= FY; yr--)
-    {
-        gotoxy(0, lr);
-        clrLine(lr);
-        sc(CYAN);
-        std::cout << "  [" << std::setw(3) << done << "/" << total << "]  Fetching " << yr << "...";
-        rc();
-        std::cout << std::flush;
-        std::string html = fetchPageForYear(yr, cy);
-        if (!html.empty())
-        {
-            auto r = parseHTML(html);
-            all.insert(all.end(), r.begin(), r.end());
-        }
-        done++;
-        ms(150);
-    }
-    clrLine(lr);
-    gotoxy(0, lr);
-    std::cout << "\n";
-    hl('=', GREEN);
-    sc(GREEN);
-    std::cout << "  SWERTRES FULL HISTORY  (" << all.size() << " draw days)\n";
-    rc();
-    sc(DGRAY);
-    std::cout << "  Source: lottopcso.com  |  Newest first\n";
-    rc();
-    hl('-', DGRAY);
-    sc(GREEN);
-    std::cout << "  " << std::left << std::setw(22) << "DATE" << std::setw(12) << "2:00 PM" << std::setw(12) << "5:00 PM" << std::setw(12) << "9:00 PM\n";
-    rc();
-    hl('-', DGRAY);
-    int shown = 0;
-    for (int i = 0; i < (int)all.size(); i++)
-    {
-        sc(i % 2 == 0 ? WHITE : DGRAY);
-        std::cout << "  " << std::left << std::setw(22) << all[i].date;
-        sc(YELLOW);
-        std::cout << std::setw(12) << (all[i].pm2.empty() ? "--" : all[i].pm2);
-        sc(CYAN);
-        std::cout << std::setw(12) << (all[i].pm5.empty() ? "--" : all[i].pm5);
-        sc(MAGENTA);
-        std::cout << std::setw(12) << (all[i].pm9.empty() ? "--" : all[i].pm9);
-        rc();
-        std::cout << "\n";
-        shown++;
-        if (shown % 40 == 0)
-        {
-            sc(DGRAY);
-            std::cout << "  -- " << shown << "/" << all.size() << "  [Space=next  Q=stop] --";
-            rc();
-            int k = rk();
-            if (k == 'q' || k == 'Q')
-                break;
-        }
-    }
-    hl('=', GREEN);
-    sc(DGRAY);
-    std::cout << "  " << shown << " of " << all.size() << " rows shown.\n";
-    rc();
-}
-void doShowAll()
-{
-    cls();
-    std::cout << "\n";
-    hl('=', CYAN);
-    sc(CYAN);
-    std::cout << "  [ SHOW ALL ]\n";
-    rc();
-    hl('-', DGRAY);
-    std::cout << "\n";
-    std::string help = "  LOCAL:  Shows all records from digit_data.txt.\n  ONLINE: Fetches full history (2009-present).\n          Paginated 40 rows. Space=next, Q=stop.\n";
-    int c = subMenu("SHOW ALL", help);
-    if (c == -1)
-    {
-        cls();
-        return;
-    }
-    std::cout << "\n";
-    if (c == 0)
-        showTableLocal();
-    else
-        showTableOnline();
     std::cout << "\n  Press any key...\n";
     rk();
     cls();
@@ -1807,122 +2340,123 @@ void doShowAll()
 // ════════════════════════════════════════════════════
 //  PROBABILITY
 // ════════════════════════════════════════════════════
-int yearFromLabel(const std::string &d)
+
+// ════════════════════════════════════════════════════
+//  PROBABILITY
+//  - 1-out-of-1000 scoring (same model as S-R-W)
+//  - No time filter: digit → confirm → results
+//  - Recurrence gap: finds when this combo last
+//    appeared and whether it is currently "overdue"
+//  - Lists every gap between consecutive appearances
+// ════════════════════════════════════════════════════
+void showProbResult(const std::vector<Entry> &sorted, const std::string &digit)
 {
-    int yr = 0;
-    for (int i = 0; i + 3 < (int)d.size(); i++)
-        if (isdigit(d[i]) && isdigit(d[i + 1]) && isdigit(d[i + 2]) && isdigit(d[i + 3]))
-        {
-            int y = std::stoi(d.substr(i, 4));
-            if (y > 1900 && y < 2100)
-                yr = y;
-        }
-    return yr;
-}
-static const char *MON_IDX[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-int dateToInt(const std::string &d)
-{
-    int yr = yearFromLabel(d);
-    if (yr == 0)
-        return 0;
-    int mon = 0;
-    for (int m = 0; m < 12; m++)
-        if (d.find(MON_IDX[m]) != std::string::npos)
-        {
-            mon = m + 1;
-            break;
-        }
-    int day = 0;
-    for (size_t i = 0; i < d.size(); i++)
-        if (isdigit(d[i]))
-        {
-            int num = 0;
-            size_t j = i;
-            while (j < d.size() && isdigit(d[j]))
-            {
-                num = num * 10 + (d[j] - '0');
-                j++;
-            }
-            if (num >= 1 && num <= 31)
-            {
-                day = num;
-                break;
-            }
-            i = j - 1;
-        }
-    return yr * 10000 + mon * 100 + day;
-}
-void showProbResult(const std::vector<Entry> &entries, const std::string &digit, const std::string &tf, const std::string &src)
-{
-    int total = 0, matches = 0;
-    std::vector<Entry> hits;
-    for (const auto &e : entries)
+    int total = (int)sorted.size();
+
+    // Collect positions (0 = most recent draw) where this combo appeared
+    std::vector<int> hitPos;
+    for (int i = 0; i < total; i++)
+        if (trimS(sorted[i].digit) == digit)
+            hitPos.push_back(i);
+    int matches = (int)hitPos.size();
+
+    // Gap analysis
+    // drawsSinceLast: how many draws have passed since last appearance
+    int drawsSinceLast = (hitPos.empty()) ? -1 : hitPos[0];
+    // Per-interval gaps between consecutive appearances
+    std::vector<int> gaps;
+    for (int i = 0; i + 1 < (int)hitPos.size(); i++)
+        gaps.push_back(hitPos[i + 1] - hitPos[i]);
+    double avgGap = 0.0;
+    if (!gaps.empty())
     {
-        if (!tf.empty() && e.time != tf)
-            continue;
-        total++;
-        if (trimS(e.digit) == trimS(digit))
-        {
-            matches++;
-            hits.push_back(e);
-        }
+        double s = 0;
+        for (int g : gaps)
+            s += g;
+        avgGap = s / gaps.size();
     }
-    std::sort(hits.begin(), hits.end(), [](const Entry &a, const Entry &b)
-              { return dateToInt(a.date) > dateToInt(b.date); });
-    double prob = (total > 0) ? (100.0 * matches / total) : 0.0;
+    else if (matches == 1)
+        avgGap = (double)total;
+    double expectedGap = (matches > 0) ? (double)total / matches : 0.0;
+    bool overdue = (drawsSinceLast > 0 && avgGap > 0 && drawsSinceLast >= avgGap * 0.85);
+
+    // 1-out-of-1000 score
+    double freq[10];
+    calcDigitFreq(sorted, freq, 35);
+    double patScore = 0.0;
+    if (digit.size() >= 5)
+    {
+        int a = digit[0] - '0', b = digit[2] - '0', c = digit[4] - '0';
+        if (a >= 0 && a <= 9 && b >= 0 && b <= 9 && c >= 0 && c <= 9)
+            patScore = freq[a] * freq[b] * freq[c] * 1000.0;
+    }
+    double histScore = (total > 0) ? (double)matches / total * 1000.0 : 0.0;
+    double score = 0.7 * patScore + 0.3 * histScore;
+    int oneInN = (score > 1e-9) ? (int)std::round(1000.0 / score) : 9999;
+    if (oneInN < 1)
+        oneInN = 1;
+    if (oneInN > 9999)
+        oneInN = 9999;
+
+    // Classify
+    // Build quick median from all 1000 combos — use a lightweight estimate
+    // Expected uniform score ≈ 1.0 per 1000; thresholds same as SRW
+    SRW_Class cls;
+    if (score >= 2.0)
+        cls = STRONG;
+    else if (score >= 0.5)
+        cls = RANDOM;
+    else
+        cls = WEAK;
+
     std::cout << "\n";
     hl('=', YELLOW);
     sc(YELLOW);
     std::cout << "  COMBO: ";
     sc(WHITE);
     std::cout << digit;
-    sc(DGRAY);
-    std::cout << "  [" << src << "]";
-    if (!tf.empty())
-    {
-        sc(DGRAY);
-        std::cout << "  [time: " << tf << "]";
-    }
     rc();
     std::cout << "\n";
     hl('-', DGRAY);
     std::cout << "\n";
+
+    // ── Probability block ──────────────────────────
     sc(WHITE);
-    std::cout << "  Appearances  ";
-    sc(DGRAY);
-    std::cout << "(times drawn)";
+    std::cout << "  S-R-W Class      : ";
+    sc(srwColor(cls));
+    std::cout << srwLabel(cls);
     rc();
-    std::cout << "\n  ";
-    sc(GREEN);
-    std::cout << matches;
-    rc();
-    std::cout << (matches == 1 ? " time" : " times") << "\n\n";
+    std::cout << "\n";
     sc(WHITE);
-    std::cout << "  Scope Total  ";
-    sc(DGRAY);
-    std::cout << "(draws checked";
-    if (!tf.empty())
-        std::cout << " at " << tf;
-    else
-        std::cout << " all slots";
-    std::cout << ")";
-    rc();
-    std::cout << "\n  ";
-    sc(CYAN);
-    std::cout << total;
-    rc();
-    std::cout << " draw results\n\n";
-    sc(WHITE);
-    std::cout << "  Probability  ";
-    sc(DGRAY);
-    std::cout << "(appearances / scope)";
-    rc();
-    std::cout << "\n  ";
+    std::cout << "  Score (per 1000) : ";
     sc(YELLOW);
-    std::cout << matches << " / " << total << " = " << std::fixed << std::setprecision(4) << prob << "%";
+    std::cout << std::fixed << std::setprecision(5) << score;
+    sc(DGRAY);
+    std::cout << "  expected hits per 1000 draws";
+    rc();
+    std::cout << "\n";
+    sc(WHITE);
+    std::cout << "  Probability      : ";
+    sc(srwColor(cls));
+    printOneInN(oneInN);
+    rc();
+    std::cout << "\n";
+    sc(WHITE);
+    std::cout << "  Pattern (35-drw) : ";
+    sc(CYAN);
+    std::cout << std::fixed << std::setprecision(5) << patScore;
+    rc();
+    std::cout << "\n";
+    sc(WHITE);
+    std::cout << "  History (all-t)  : ";
+    sc(DGRAY);
+    std::cout << std::fixed << std::setprecision(5) << histScore;
     rc();
     std::cout << "\n\n";
-    int fill = (int)(prob / 100.0 * 40);
+
+    // Bar scaled: 1.0 = exactly expected (uniform). Cap display at 5× expected.
+    double barNorm = std::min(score / 5.0, 1.0);
+    int fill = (int)(barNorm * 40);
     if (fill == 0 && matches > 0)
         fill = 1;
     std::cout << "  [";
@@ -1942,10 +2476,76 @@ void showProbResult(const std::vector<Entry> &entries, const std::string &digit,
     rc();
     std::cout << "] ";
     sc(YELLOW);
-    std::cout << std::fixed << std::setprecision(2) << prob << "%";
+    std::cout << std::fixed << std::setprecision(5) << score;
+    sc(DGRAY);
+    std::cout << " / 1000";
     rc();
     std::cout << "\n\n";
-    if (!hits.empty())
+
+    // ── Recurrence gap block ───────────────────────
+    hl('-', DGRAY);
+    sc(WHITE);
+    std::cout << "  Appearances      : ";
+    sc(GREEN);
+    std::cout << matches;
+    sc(DGRAY);
+    std::cout << (matches == 1 ? " time" : " times") << " in " << total << " draws";
+    rc();
+    std::cout << "\n";
+    sc(WHITE);
+    std::cout << "  Expected gap     : ";
+    sc(DGRAY);
+    if (matches > 0)
+        std::cout << std::fixed << std::setprecision(1) << expectedGap << " draws  (total÷hits)";
+    else
+        std::cout << "N/A";
+    rc();
+    std::cout << "\n";
+    sc(WHITE);
+    std::cout << "  Avg actual gap   : ";
+    sc(DGRAY);
+    if (matches >= 2)
+        std::cout << std::fixed << std::setprecision(1) << avgGap << " draws  (" << (int)gaps.size() << " intervals)";
+    else if (matches == 1)
+        std::cout << "only 1 hit — no gap data";
+    else
+        std::cout << "never appeared";
+    rc();
+    std::cout << "\n";
+    sc(WHITE);
+    std::cout << "  Draws since last : ";
+    if (drawsSinceLast < 0)
+    {
+        sc(DGRAY);
+        std::cout << "Never appeared";
+    }
+    else if (drawsSinceLast == 0)
+    {
+        sc(GREEN);
+        std::cout << "Appeared in the most recent draw";
+    }
+    else
+    {
+        if (overdue)
+            sc(RED);
+        else
+            sc(CYAN);
+        std::cout << drawsSinceLast << " draws ago";
+    }
+    rc();
+    std::cout << "\n";
+    if (overdue)
+    {
+        sc(RED);
+        std::cout << "  *** OVERDUE: " << drawsSinceLast << " draws passed";
+        std::cout << " (avg gap " << std::fixed << std::setprecision(1) << avgGap << ")";
+        rc();
+        std::cout << "\n";
+    }
+    std::cout << "\n";
+
+    // ── All appearances with per-interval gaps ─────
+    if (!hitPos.empty())
     {
         hl('-', DGRAY);
         sc(WHITE);
@@ -1953,34 +2553,56 @@ void showProbResult(const std::vector<Entry> &entries, const std::string &digit,
         sc(YELLOW);
         std::cout << digit;
         sc(DGRAY);
-        std::cout << "  (newest first)";
+        std::cout << "  (newest first, gap = draws until next hit)";
         rc();
         std::cout << "\n";
         hl('-', DGRAY);
         int shown = 0, lastYr = -1;
-        for (int i = 0; i < (int)hits.size(); i++)
+        for (int i = 0; i < (int)hitPos.size(); i++)
         {
-            int yr = yearFromLabel(hits[i].date);
+            const Entry &e = sorted[hitPos[i]];
+            int yr = yearFromLabel(e.date);
             if (yr != lastYr)
             {
                 sc(DARK_CYAN);
-                std::cout << "  -- " << yr << " --\n";
+                std::cout << "  ── " << yr << " ──\n";
                 rc();
                 lastYr = yr;
             }
             sc(DGRAY);
             std::cout << "  " << std::setw(4) << (i + 1) << ". ";
             sc(CYAN);
-            std::cout << std::left << std::setw(20) << hits[i].date;
+            std::cout << std::left << std::setw(22) << e.date;
             sc(MAGENTA);
-            std::cout << hits[i].time;
+            std::cout << std::setw(6) << e.time;
+            if (i < (int)gaps.size())
+            {
+                sc(DGRAY);
+                std::cout << "  gap→next: ";
+                int g = gaps[i];
+                if (g > (int)avgGap * 1.5)
+                {
+                    sc(RED);
+                    std::cout << g << " draws";
+                }
+                else if (g < (int)avgGap * 0.5)
+                {
+                    sc(GREEN);
+                    std::cout << g << " draws";
+                }
+                else
+                {
+                    sc(DGRAY);
+                    std::cout << g << " draws";
+                }
+            }
             rc();
             std::cout << "\n";
             shown++;
             if (shown % 40 == 0)
             {
                 sc(DGRAY);
-                std::cout << "  -- " << shown << "/" << hits.size() << "  [Space=next  Q=stop] --";
+                std::cout << "  -- " << shown << "/" << hitPos.size() << "  [Space=next  Q=stop] --";
                 rc();
                 int k = rk();
                 if (k == 'q' || k == 'Q')
@@ -1991,11 +2613,12 @@ void showProbResult(const std::vector<Entry> &entries, const std::string &digit,
     else
     {
         sc(DGRAY);
-        std::cout << "  Never appeared.\n";
+        std::cout << "  Never appeared in database.\n";
         rc();
     }
     hl('=', YELLOW);
 }
+
 void doProb()
 {
     cls();
@@ -2007,120 +2630,76 @@ void doProb()
     hl('-', DGRAY);
     std::cout << "\n";
     std::string help =
-        "  APPEARANCES: Times the combo was drawn.\n"
-        "  SCOPE TOTAL: Total draws checked.\n"
-        "    No time filter = all 3 slots counted.\n"
-        "    Time filter = only that slot.\n"
-        "  PROBABILITY: appearances / scope x 100\n\n"
-        "  LOCAL:  Uses digit_data.txt\n"
-        "  ONLINE: Fetches all years, then analyzes.\n\n"
-        "  DIGIT FORMAT: full combo  e.g.  5-9-2\n";
-    int choice = subMenu("PROBABILITY", help);
-    if (choice == -1)
+        "  PROBABILITY — 1 out of 1000 model\n\n"
+        "  Analyzes a combo's expected frequency and\n"
+        "  recurrence gap from the draw history.\n\n"
+        "  SCORE = 70% 35-draw digit pattern\n"
+        "        + 30% all-time historical frequency\n"
+        "  Expressed as X per 1000 draws | 1-in-N\n\n"
+        "  RECURRENCE GAP:\n"
+        "  How many draws since the last appearance.\n"
+        "  OVERDUE = gap >= 85% of average gap.\n"
+        "  Each appearance also shows the interval\n"
+        "  to the next hit (long gaps in red).\n\n"
+        "  DIGIT: 5-9-2 or 592 (auto-converted)\n"
+        "  No time filter needed — just the combo.\n";
+    if (!subMenu2("PROBABILITY", help))
     {
         cls();
         return;
     }
+    cls();
+    std::cout << "\n";
+    hl('=', YELLOW);
+    sc(YELLOW);
+    std::cout << "  [ PROBABILITY — Loading ]\n";
+    rc();
+    hl('-', DGRAY);
     std::cout << "\n";
     sc(DGRAY);
-    std::cout << "  e.g. 5-9-2\n";
+    std::cout << "  Checking for new draws...\n";
     rc();
-    std::string digit = inp("  Digit combo to analyze   : ");
-    std::string tf = inp("  Filter by time (or blank): ");
+    tryAutoSync(true);
+    auto entries = loadDB();
+    if (entries.empty())
+    {
+        sc(RED);
+        std::cout << "\n  No data. Run Sync DB first.\n";
+        rc();
+        std::cout << "\n  Press any key...\n";
+        rk();
+        cls();
+        return;
+    }
+    // Sort newest-first
+    auto slotOrd = [](const std::string &t) -> int
+    {if(t=="9pm")return 2;if(t=="5pm")return 1;return 0; };
+    std::sort(entries.begin(), entries.end(), [&](const Entry &a, const Entry &b)
+              {
+        int da=dateToInt(a.date),db=dateToInt(b.date);if(da!=db)return da>db;
+        return slotOrd(a.time)>slotOrd(b.time); });
     std::cout << "\n";
-    if (!tf.empty() && !vtm(tf))
-    {
-        sc(RED);
-        std::cout << "  Invalid time.\n";
-        rc();
-        std::cout << "\n  Press any key...\n";
-        rk();
-        cls();
-        return;
-    }
-    if (digit.empty())
-    {
-        sc(RED);
-        std::cout << "  Digit cannot be empty.\n";
-        rc();
-        std::cout << "\n  Press any key...\n";
-        rk();
-        cls();
-        return;
-    }
-    std::string src = choice == 0 ? "LOCAL" : "ONLINE";
-    if (!confirmDlg("Analyze [" + src + "]: " + digit + (tf.empty() ? "" : " | " + tf)))
+    sc(DGRAY);
+    std::cout << "  Combo: e.g. 5-9-2 or 592\n\n";
+    rc();
+    sc(WHITE);
+    std::cout << "  Combo to analyze: ";
+    rc();
+    std::string digit = inpDigit("");
+    std::cout << "\n";
+    if (!confirmDlg("Analyze: " + digit))
     {
         cls();
         return;
     }
-    if (choice == 0)
-    {
-        pulse("Analyzing local data", 2);
-        auto entries = loadDB();
-        if (entries.empty())
-        {
-            sc(RED);
-            std::cout << "\n  No data. Run Sync DB first.\n";
-            rc();
-            std::cout << "\n  Press any key...\n";
-            rk();
-            cls();
-            return;
-        }
-        showProbResult(entries, digit, tf, "LOCAL");
-    }
-    else
-    {
-        sc(DGRAY);
-        std::cout << "  Checking connection...";
-        rc();
-        std::cout << std::flush;
-        if (!isOnline())
-        {
-            noInternet();
-            return;
-        }
-        int cy = getCurrentYear();
-        const int FY = 2009;
-        int total = cy - FY + 1, done = 0;
-        std::vector<Entry> all;
-        int lr = gpos().Y + 1;
-        std::cout << "\n";
-        for (int yr = cy; yr >= FY; yr--)
-        {
-            gotoxy(0, lr);
-            clrLine(lr);
-            sc(CYAN);
-            std::cout << "  [" << std::setw(3) << done << "/" << total << "]  Fetching " << yr << "...";
-            rc();
-            std::cout << std::flush;
-            auto entries = fetchYear(yr, cy);
-            all.insert(all.end(), entries.begin(), entries.end());
-            done++;
-            ms(150);
-        }
-        clrLine(lr);
-        gotoxy(0, lr);
-        if (all.empty())
-        {
-            sc(RED);
-            std::cout << "\n  No data retrieved.\n";
-            rc();
-            std::cout << "\n  Press any key...\n";
-            rk();
-            cls();
-            return;
-        }
-        showProbResult(all, digit, tf, "ONLINE — " + std::to_string(all.size()) + " entries");
-    }
+    pulse("Analyzing pattern and recurrence", 2);
+    showProbResult(entries, digit);
     std::cout << "\n  Press any key...\n";
     rk();
     cls();
 }
 
-// ════════════════════════════════════════════════════
-//  LAST DIGIT
+//  COMBO section: repeating-digit combos in the gap
 // ════════════════════════════════════════════════════
 struct LastDigitRecord
 {
@@ -2128,9 +2707,19 @@ struct LastDigitRecord
     int posInWindow, uniqueRank;
 };
 
-std::vector<LastDigitRecord> computeLastDigits(const std::vector<Entry> &sorted, int startIdx, int N)
+// Returns true if combo has a repeated digit: e.g. 1-1-5, 5-5-5, 2-7-2
+bool hasRepeatDigit(const std::string &combo)
 {
-    int total = (int)sorted.size(), windowEnd = std::min(startIdx + 999, total);
+    if (combo.size() < 5)
+        return false;
+    int a = combo[0] - '0', b = combo[2] - '0', c = combo[4] - '0';
+    return a == b || b == c || a == c;
+}
+
+std::vector<LastDigitRecord> computeLastDigits(const std::vector<Entry> &sorted, int startIdx, int windowSize, int N)
+{
+    int total = (int)sorted.size();
+    int windowEnd = std::min(startIdx + windowSize, total);
     std::set<std::string> seen;
     std::vector<LastDigitRecord> unique;
     for (int i = startIdx; i < windowEnd; i++)
@@ -2149,7 +2738,8 @@ std::vector<LastDigitRecord> computeLastDigits(const std::vector<Entry> &sorted,
         }
     }
     std::vector<LastDigitRecord> result;
-    int uTotal = (int)unique.size(), start2 = std::max(0, uTotal - N);
+    int uTotal = (int)unique.size();
+    int start2 = std::max(0, uTotal - N);
     for (int i = uTotal - 1; i >= start2; i--)
     {
         LastDigitRecord r = unique[i];
@@ -2166,6 +2756,7 @@ std::vector<Entry> getDrawsOnDate(const std::vector<Entry> &all, const std::stri
             v.push_back(e);
     return v;
 }
+
 void doLastDigit()
 {
     cls();
@@ -2177,26 +2768,29 @@ void doLastDigit()
     hl('-', DGRAY);
     std::cout << "\n";
     std::string help =
-        "  Looks at 999 draws from a chosen start.\n\n"
-        "  AUTO FIND: starts from most current draw.\n"
+        "  Scans a draw window and finds which combos\n"
+        "  have NOT appeared recently (last digits).\n\n"
+        "  AUTO FIND: window starts at most recent draw.\n"
         "  STARTING POINT: pick a specific date & time.\n\n"
-        "  Each combo counted ONCE (most recent only).\n"
-        "  #1 = combo farthest back in window (true last).\n"
-        "  Select N (1-9) = how many last digits to show.\n\n"
-        "  FOLLOW-UP: see combos shared between the\n"
-        "  last-digit day and your start day.\n\n"
-        "  Uses local digit_data.txt.\n";
+        "  WINDOW SIZE: how many draws deep to scan.\n"
+        "  e.g. 10 = look at the last 10 draws only,\n"
+        "       100 = last 100, 1000 = last 1000.\n"
+        "  Each combo counted ONCE (most recent first).\n"
+        "  #1 = combo farthest back = true last digit.\n\n"
+        "  N = how many ranked results to display.\n\n"
+        "  Uses local DB + auto-synced latest draws.\n";
+
     int sr = gpos().Y, entryChoice = 0;
     {
         auto drawEntry = [&](int hi)
         {
             gotoxy(0, sr);
             clrLine(sr);
-            sc(CYAN);
+            sc(MAGENTA);
             std::cout << "  [ LAST DIGIT ]";
             rc();
             const char *opts[] = {"[1] Auto Find", "[2] Starting Point", "[3] Help", "[4] Back"};
-            const char *desc[] = {"  Most current draw", "  Pick a date & time", "  How this works", "  Return to main menu"};
+            const char *desc[] = {"  Most current draw", "  Pick a specific draw", "  How this works", "  Return to main menu"};
             for (int i = 0; i < 4; i++)
             {
                 clrLine(sr + 1 + i);
@@ -2204,7 +2798,7 @@ void doLastDigit()
                 std::cout << "  ";
                 if (i == hi)
                 {
-                    sc(CYAN);
+                    sc(MAGENTA);
                     std::cout << "-> " << opts[i];
                     sc(DGRAY);
                     std::cout << desc[i];
@@ -2268,7 +2862,7 @@ void doLastDigit()
                 clrLine(hr);
                 gotoxy(0, hr);
                 sc(DGRAY);
-                std::cout << "  Press any key to go back...";
+                std::cout << "  Press any key...";
                 rc();
                 rk();
                 drawEntry(-1);
@@ -2284,50 +2878,132 @@ void doLastDigit()
             }
         }
     }
+
+    // ── Step 1: Window size (how many draws deep to scan) ──
     cls();
     std::cout << "\n";
     hl('=', DARK_MAG);
     sc(MAGENTA);
-    std::cout << "  [ LAST DIGIT — Select Count ]\n";
+    std::cout << "  [ LAST DIGIT — Window Size ]\n";
     rc();
     hl('-', DGRAY);
     std::cout << "\n";
     sc(WHITE);
-    std::cout << "  How many last digits?\n";
+    std::cout << "  How many draws to include in the scan window?\n\n";
     sc(DGRAY);
-    std::cout << "  (bottom of the 999-draw unique list)\n\n";
+    std::cout << "  This is the END of your window — the program scans\n";
+    std::cout << "  this many draws starting from your chosen start point.\n\n";
+    std::cout << "  Examples:\n";
+    std::cout << "    10   = scan only the last 10 draws\n";
+    std::cout << "    100  = scan the last 100 draws\n";
+    std::cout << "    500  = scan the last 500 draws\n";
+    std::cout << "    1000 = full 1000-draw window (maximum)\n\n";
+    sc(CYAN);
+    std::cout << "  Quick picks: [1]=10  [2]=50  [3]=100  [4]=500  [5]=1000\n";
+    sc(DGRAY);
+    std::cout << "  Or type any number from 1 to 1000.\n\n";
     rc();
-    for (int i = 1; i <= 9; i++)
+    hl('-', DGRAY);
+    int windowSize = 0;
+    while (true)
     {
-        sc(DGRAY);
-        std::cout << "  [" << i << "] ";
-        sc(WHITE);
-        if (i == 1)
-            std::cout << "Only #1  (the true last digit)\n";
-        else
-            std::cout << "Last " << i << "  (#1=oldest, #" << i << "=most recent of set)\n";
+        std::string ws = inp("  Window size (1-1000) or quick pick 1-5: ");
+        if (ws == "1")
+        {
+            windowSize = 10;
+            break;
+        }
+        if (ws == "2")
+        {
+            windowSize = 50;
+            break;
+        }
+        if (ws == "3")
+        {
+            windowSize = 100;
+            break;
+        }
+        if (ws == "4")
+        {
+            windowSize = 500;
+            break;
+        }
+        if (ws == "5")
+        {
+            windowSize = 1000;
+            break;
+        }
+        try
+        {
+            windowSize = std::stoi(ws);
+        }
+        catch (...)
+        {
+            windowSize = 0;
+        }
+        if (windowSize >= 1 && windowSize <= 1000)
+            break;
+        sc(RED);
+        std::cout << "  Invalid. Enter 1-1000 (or quick pick 1-5).\n";
         rc();
     }
-    std::cout << "\n";
-    hl('-', DGRAY);
-    sc(DGRAY);
-    std::cout << "  Press 1 - 9  (Esc = back)\n";
+    sc(CYAN);
+    std::cout << "  Window set to: ";
+    sc(WHITE);
+    std::cout << windowSize << " draws\n\n";
     rc();
+
+    // ── Step 2: How many ranked results to show ─────────
+    cls();
+    std::cout << "\n";
+    hl('=', DARK_MAG);
+    sc(MAGENTA);
+    std::cout << "  [ LAST DIGIT — Results to Show ]\n";
+    rc();
+    hl('-', DGRAY);
+    std::cout << "\n";
+    sc(WHITE);
+    std::cout << "  How many last digits to display?\n\n";
+    sc(DGRAY);
+    std::cout << "  The window (" << windowSize << " draws) may contain hundreds of unique\n";
+    std::cout << "  combos. Choose how many to rank and show:\n\n";
+    std::cout << "  1   = only the #1 true last digit\n";
+    std::cout << "  10  = last 10 unseen combos\n";
+    std::cout << "  999 = full ranked list\n\n";
+    rc();
+    hl('-', DGRAY);
     int N = 0;
     while (true)
     {
-        int k = rk();
-        if (k == KX)
+        std::string ns = inp("  Enter count (1-999): ");
+        try
         {
-            cls();
-            return;
+            N = std::stoi(ns);
         }
-        if (k >= '1' && k <= '9')
+        catch (...)
         {
-            N = k - '0';
+            N = 0;
+        }
+        if (N >= 1 && N <= 999)
             break;
-        }
+        sc(RED);
+        std::cout << "  Invalid. Enter 1-999.\n";
+        rc();
     }
+
+    // Load
+    cls();
+    std::cout << "\n";
+    hl('=', DARK_MAG);
+    sc(MAGENTA);
+    std::cout << "  [ LAST DIGIT — Loading ]\n";
+    rc();
+    hl('-', DGRAY);
+    std::cout << "\n";
+    sc(DGRAY);
+    std::cout << "  Checking for new draws...\n";
+    rc();
+    tryAutoSync(true);
     pulse("Loading digit_data.txt...", 2);
     auto entries = loadDB();
     if (entries.empty())
@@ -2344,7 +3020,9 @@ void doLastDigit()
     {if(t=="9pm")return 2;if(t=="5pm")return 1;return 0; };
     std::sort(entries.begin(), entries.end(), [&](const Entry &a, const Entry &b)
               {
-        int da=dateToInt(a.date),db=dateToInt(b.date);if(da!=db)return da>db;return slotOrd(a.time)>slotOrd(b.time); });
+        int da=dateToInt(a.date),db=dateToInt(b.date);if(da!=db)return da>db;
+        return slotOrd(a.time)>slotOrd(b.time); });
+
     int startIdx = 0;
     if (entryChoice == 2)
     {
@@ -2357,7 +3035,7 @@ void doLastDigit()
         hl('-', DGRAY);
         std::cout << "\n";
         sc(DGRAY);
-        std::cout << "  The 999-draw window begins at this draw.\n\n";
+        std::cout << "  The 1000-draw window begins at this draw.\n\n";
         rc();
         std::string sDate = inp("  Date  (e.g. Mar 5, 2026) : ");
         std::string sTime = inp("  Time  (2pm / 5pm / 9pm)  : ");
@@ -2397,29 +3075,35 @@ void doLastDigit()
             return;
         }
     }
-    int totalDB = (int)entries.size(), windowEnd = std::min(startIdx + 999, totalDB);
-    std::string startDateDisplay = entries[startIdx].date, draw999Display = entries[windowEnd - 1].date;
-    auto results = computeLastDigits(entries, startIdx, N);
+
+    int totalDB = (int)entries.size();
+    int windowEnd = std::min(startIdx + windowSize, totalDB); // user-defined window end
+    std::string startDateDisplay = entries[startIdx].date;
+    std::string drawEndDisplay = entries[windowEnd - 1].date;
+    auto results = computeLastDigits(entries, startIdx, windowSize, N);
     if (results.empty())
     {
         sc(RED);
-        std::cout << "\n  Not enough data.\n";
+        std::cout << "\n  Not enough data in this window.\n";
         rc();
         std::cout << "\n  Press any key...\n";
         rk();
         cls();
         return;
     }
+
     std::set<std::string> tmpSeen;
     int totalUnique = 0;
     for (int i = startIdx; i < windowEnd; i++)
         if (tmpSeen.insert(trimS(entries[i].digit)).second)
             totalUnique++;
+
+    // Display last digit results
     cls();
     std::cout << "\n";
     hl('=', DARK_MAG);
     sc(MAGENTA);
-    std::cout << "  [ LAST DIGIT — Last " << N << " in 999-Draw Window ]\n";
+    std::cout << "  [ LAST DIGIT — Last " << N << " in " << windowSize << "-Draw Window ]\n";
     rc();
     hl('-', DGRAY);
     std::cout << "\n";
@@ -2439,11 +3123,15 @@ void doLastDigit()
     sc(DGRAY);
     std::cout << "  End   : draw #" << (windowEnd - startIdx) << " = ";
     sc(CYAN);
-    std::cout << draw999Display;
+    std::cout << drawEndDisplay;
     rc();
     std::cout << "\n";
     sc(DGRAY);
-    std::cout << "  Unique: ";
+    std::cout << "  Window: ";
+    sc(YELLOW);
+    std::cout << windowSize;
+    sc(DGRAY);
+    std::cout << " draws  |  Unique combos: ";
     sc(YELLOW);
     std::cout << totalUnique;
     sc(DGRAY);
@@ -2455,6 +3143,7 @@ void doLastDigit()
     std::cout << "  Rank  Combo       Last seen                   Window pos\n";
     rc();
     hl('-', DGRAY);
+
     for (const auto &r : results)
     {
         if (r.uniqueRank == 1)
@@ -2478,10 +3167,12 @@ void doLastDigit()
     std::cout << "\n";
     hl('-', DGRAY);
     sc(DGRAY);
-    std::cout << "  #1 = combo farthest back in window\n";
+    std::cout << "  #1 = combo farthest back in window (true last digit)\n";
     rc();
-    hl('-', DGRAY);
+
+    // Follow-up options
     std::cout << "\n";
+    hl('-', DGRAY);
     std::string lastDay = results[0].date, topDay = entries[startIdx].date;
     while (true)
     {
@@ -2510,7 +3201,8 @@ void doLastDigit()
         }
         if (k != '2')
             continue;
-        auto lastDayDraws = getDrawsOnDate(entries, lastDay), topDayDraws = getDrawsOnDate(entries, topDay);
+        auto lastDayDraws = getDrawsOnDate(entries, lastDay);
+        auto topDayDraws = getDrawsOnDate(entries, topDay);
         std::set<std::string> lastSet, topSet;
         for (const auto &e : lastDayDraws)
             lastSet.insert(trimS(e.digit));
@@ -2591,81 +3283,6 @@ void doLastDigit()
 }
 
 // ════════════════════════════════════════════════════
-//  DELETE
-// ════════════════════════════════════════════════════
-void doDelete()
-{
-    cls();
-    std::cout << "\n";
-    hl('=', RED);
-    sc(RED);
-    std::cout << "  [ DELETE ]\n";
-    rc();
-    hl('-', DGRAY);
-    std::cout << "\n";
-    std::string help = "  Enter date (YYYY-MM-DD) and time.\n  The matching record is permanently removed.\n";
-    if (!subMenu2("DELETE", help))
-    {
-        cls();
-        return;
-    }
-    std::cout << "\n";
-    std::string date = inp("  Date  (YYYY-MM-DD) : ");
-    std::string t = inp("  Time  (2pm/5pm/9pm): ");
-    std::cout << "\n";
-    if (!vtm(t))
-    {
-        sc(RED);
-        std::cout << "  Invalid time.\n";
-        rc();
-        std::cout << "\n  Press any key...\n";
-        rk();
-        cls();
-        return;
-    }
-    auto data = loadDB();
-    auto it = std::find_if(data.begin(), data.end(), [&](const Entry &e)
-                           { return e.date == date && e.time == t; });
-    if (it == data.end())
-    {
-        sc(RED);
-        std::cout << "  No record found.\n";
-        rc();
-        std::cout << "\n  Press any key...\n";
-        rk();
-        cls();
-        return;
-    }
-    sc(WHITE);
-    std::cout << "  Found: ";
-    sc(YELLOW);
-    std::cout << it->digit;
-    sc(WHITE);
-    std::cout << "  |  ";
-    sc(CYAN);
-    std::cout << it->date;
-    sc(WHITE);
-    std::cout << "  |  ";
-    sc(MAGENTA);
-    std::cout << it->time;
-    rc();
-    std::cout << "\n\n";
-    if (!confirmDlg("DELETE this entry permanently?"))
-    {
-        cls();
-        return;
-    }
-    data.erase(it);
-    saveDB(data);
-    sc(GREEN);
-    std::cout << "\n  Entry deleted.\n";
-    rc();
-    std::cout << "\n  Press any key...\n";
-    rk();
-    cls();
-}
-
-// ════════════════════════════════════════════════════
 //  BROWSE
 // ════════════════════════════════════════════════════
 void doBrowse()
@@ -2678,54 +3295,74 @@ void doBrowse()
     rc();
     hl('-', DGRAY);
     std::cout << "\n";
-    std::string help = "  Fetches current year Swertres results\n  from lottopcso.com.\n  Requires internet connection.\n";
+    std::string help = "  Shows current year Swertres results.\n  Auto-syncs new draws if online.\n  Falls back to local DB if offline.\n";
     if (!subMenu2("BROWSE", help))
     {
         cls();
         return;
     }
-    if (!confirmDlg("Fetch current year results?"))
-    {
-        cls();
-        return;
-    }
-    sc(DGRAY);
-    std::cout << "\n  Checking connection...";
-    rc();
-    std::cout << std::flush;
-    if (!isOnline())
-    {
-        noInternet();
-        return;
-    }
-    int cy = getCurrentYear();
-    int lr = gpos().Y;
-    gotoxy(2, lr);
-    sc(CYAN);
-    std::cout << "  Fetching...";
-    rc();
-    std::cout << std::flush;
-    std::string html = fetchPageForYear(cy, cy);
-    clrLine(lr);
-    gotoxy(0, lr);
-    if (html.empty())
-    {
-        sc(RED);
-        std::cout << "\n  Fetch failed.\n";
-        rc();
-        std::cout << "\n  Press any key...\n";
-        rk();
-        cls();
-        return;
-    }
-    auto rows = parseHTML(html);
+    cls();
     std::cout << "\n";
     hl('=', GREEN);
     sc(GREEN);
-    std::cout << "  SWERTRES — Current Year\n";
+    std::cout << "  [ BROWSE — Loading ]\n";
+    rc();
+    hl('-', DGRAY);
+    std::cout << "\n";
+    sc(DGRAY);
+    std::cout << "  Fetching current year results...\n";
+    rc();
+    int cy = getCurrentYear();
+    bool online = isOnline();
+    std::vector<DrawRow> rows;
+    if (online)
+    {
+        std::string html = fetchPageForYear(cy, cy);
+        if (!html.empty())
+        {
+            rows = parseHTML(html);
+            auto newEntries = rowsToEntries(rows);
+            int added = mergeIntoDB(newEntries);
+            if (added > 0)
+            {
+                sc(GREEN);
+                std::cout << "  [+] " << added << " new record(s) saved\n";
+                rc();
+            }
+        }
+    }
+    if (rows.empty())
+    {
+        sc(YELLOW);
+        std::cout << "  " << (online ? "Fetch failed — " : "Offline — ") << "showing local DB.\n";
+        rc();
+        auto data = loadDB();
+        std::map<std::string, DrawRow> byDate;
+        for (const auto &e : data)
+        {
+            if (yearFromLabel(e.date) != cy)
+                continue;
+            DrawRow &dr = byDate[e.date];
+            dr.date = e.date;
+            if (e.time == "2pm")
+                dr.pm2 = e.digit;
+            else if (e.time == "5pm")
+                dr.pm5 = e.digit;
+            else if (e.time == "9pm")
+                dr.pm9 = e.digit;
+        }
+        for (auto &p : byDate)
+            rows.push_back(p.second);
+        std::sort(rows.begin(), rows.end(), [](const DrawRow &a, const DrawRow &b)
+                  { return dateToInt(a.date) > dateToInt(b.date); });
+    }
+    std::cout << "\n";
+    hl('=', GREEN);
+    sc(GREEN);
+    std::cout << "  SWERTRES — " << cy << "\n";
     rc();
     sc(DGRAY);
-    std::cout << "  Source: lottopcso.com\n";
+    std::cout << "  Source: " << (online ? "lottopcso.com" : "local DB") << "\n";
     rc();
     hl('-', DGRAY);
     sc(GREEN);
@@ -2755,7 +3392,7 @@ void doBrowse()
 }
 
 // ════════════════════════════════════════════════════
-//  IMPORT CSV
+//  IMPORT — file browser + terminal input
 // ════════════════════════════════════════════════════
 static const char *MONTH_NAMES[] = {"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 std::string csvTimeToSlot(const std::string &t)
@@ -2820,47 +3457,136 @@ bool parseCSVLine(const std::string &line, Entry &out)
     out.digit = strip0(d1) + "-" + strip0(d2) + "-" + strip0(d3);
     return true;
 }
-void doImportCSV()
+bool endsWithCSV(const std::string &s)
 {
+    if (s.size() < 4)
+        return false;
+    std::string ext = s.substr(s.size() - 4);
+    for (auto &c : ext)
+        c = (char)tolower(c);
+    return ext == ".csv";
+}
+
+// Platform-specific file picker
+// Returns selected filename or "" if cancelled
+std::string pickCSVFile()
+{
+#ifdef _WIN32
+    // Windows: use GetOpenFileName dialog
+    char buf[MAX_PATH] = {0};
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = NULL;
+    ofn.lpstrFilter = "CSV Files (*.csv)\0*.csv\0All Files (*.*)\0*.*\0\0";
+    ofn.lpstrFile = buf;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = "Select CSV File";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (GetOpenFileNameA(&ofn))
+        return std::string(buf);
+    return "";
+#else
+    // Linux/Termux: list .csv files in current directory
+    std::vector<std::string> csvFiles;
+    DIR *dir = opendir(".");
+    if (dir)
+    {
+        struct dirent *ent;
+        while ((ent = readdir(dir)) != NULL)
+        {
+            std::string name = ent->d_name;
+            if (endsWithCSV(name))
+                csvFiles.push_back(name);
+        }
+        closedir(dir);
+    }
+    std::sort(csvFiles.begin(), csvFiles.end());
+    if (csvFiles.empty())
+    {
+        sc(YELLOW);
+        std::cout << "\n  No .csv files found in current directory.\n";
+        rc();
+        sc(DGRAY);
+        std::cout << "  Use option [2] to type the file path manually.\n";
+        rc();
+        return "";
+    }
     cls();
     std::cout << "\n";
     hl('=', YELLOW);
     sc(YELLOW);
-    std::cout << "  [ IMPORT CSV ]\n";
+    std::cout << "  [ IMPORT — Select CSV File ]\n";
     rc();
     hl('-', DGRAY);
     std::cout << "\n";
-    std::string help =
-        "  FORMAT: ID,DD.MM.YYYY,HH:MM,d1,d2,d3\n"
-        "  e.g.  00001,02.01.2007,11:00,05,08,07\n\n"
-        "  TIME: 11:00/14:00->2pm  16:00/17:00->5pm  21:00->9pm\n"
-        "  Duplicates (same date+time+digit) are skipped.\n"
-        "  Place the CSV in the same folder as digit.\n";
-    if (!subMenu2("IMPORT CSV", help))
+    sc(DGRAY);
+    std::cout << "  CSV files in current directory:\n\n";
+    rc();
+    for (int i = 0; i < (int)csvFiles.size(); i++)
     {
-        cls();
-        return;
+        sc(CYAN);
+        std::cout << "  [" << (i + 1) << "] ";
+        sc(WHITE);
+        std::cout << csvFiles[i];
+        rc();
+        std::cout << "\n";
     }
     std::cout << "\n";
     sc(DGRAY);
-    std::cout << "  Place the CSV in the same folder as digit\n";
+    std::cout << "  [0] Cancel\n\n";
     rc();
-    std::string filename = inp("  CSV filename (e.g. swertres.csv): ");
+    hl('-', DGRAY);
+    while (true)
+    {
+        std::string ns = inp("  Enter number (0 to cancel): ");
+        int sel = -1;
+        try
+        {
+            sel = std::stoi(ns);
+        }
+        catch (...)
+        {
+            sel = -1;
+        }
+        if (sel == 0)
+            return "";
+        if (sel >= 1 && sel <= (int)csvFiles.size())
+            return csvFiles[sel - 1];
+        sc(RED);
+        std::cout << "  Invalid. Enter 0-" << csvFiles.size() << "\n";
+        rc();
+    }
+#endif
+}
+
+void doImportCSV(const std::string &filename)
+{
     if (filename.empty())
     {
         cls();
         return;
     }
-    std::ifstream f(filename);
-    if (!f.is_open())
+    // Validate extension
+    if (!endsWithCSV(filename))
     {
-        if (filename.find('.') == std::string::npos)
-        {
-            f.open(filename + ".csv");
-            if (f.is_open())
-                filename += ".csv";
-        }
+        std::cout << "\n";
+        hl('-', RED);
+        sc(RED);
+        std::cout << "  [!] Only .csv files are allowed.\n";
+        rc();
+        sc(DGRAY);
+        std::cout << "  Selected: ";
+        sc(WHITE);
+        std::cout << filename;
+        rc();
+        std::cout << "\n";
+        hl('-', RED);
+        std::cout << "\n  Press any key...\n";
+        rk();
+        cls();
+        return;
     }
+    std::ifstream f(filename);
     if (!f.is_open())
     {
         std::cout << "\n";
@@ -2872,7 +3598,7 @@ void doImportCSV()
         rc();
         std::cout << "\n";
         sc(DGRAY);
-        std::cout << "  Make sure the file is in the same folder.\n";
+        std::cout << "  Check the file path.\n";
         rc();
         hl('-', RED);
         std::cout << "\n  Press any key...\n";
@@ -2929,10 +3655,10 @@ void doImportCSV()
         std::cout << "\n";
         hl('-', RED);
         sc(RED);
-        std::cout << "  [!] No valid records found.\n";
+        std::cout << "  [!] No valid records.\n";
         rc();
         sc(DGRAY);
-        std::cout << "  Check the CSV format.\n";
+        std::cout << "  Check CSV format.\n";
         rc();
         hl('-', RED);
         std::cout << "\n  Press any key...\n";
@@ -2998,8 +3724,177 @@ void doImportCSV()
     cls();
 }
 
+void doImport()
+{
+    cls();
+    std::cout << "\n";
+    hl('=', YELLOW);
+    sc(YELLOW);
+    std::cout << "  [ IMPORT ]\n";
+    rc();
+    hl('-', DGRAY);
+    std::cout << "\n";
+    std::string help =
+        "  Imports a CSV file into digit_data.txt.\n\n"
+        "  FORMAT: ID,DD.MM.YYYY,HH:MM,d1,d2,d3\n"
+        "  e.g.  00001,02.01.2007,11:00,05,08,07\n\n"
+        "  TIME: 11:00/14:00->2pm  16:00->5pm  21:00->9pm\n"
+        "  Only .csv files are accepted.\n"
+        "  Duplicates are skipped automatically.\n\n"
+        "  [1] Browse  - Open file picker / list CSVs\n"
+        "  [2] Type    - Enter filename or path manually\n";
+
+    int sr = gpos().Y;
+    auto drawImport = [&](int hi)
+    {
+        gotoxy(0, sr);
+        clrLine(sr);
+        sc(YELLOW);
+        std::cout << "  [ IMPORT ]";
+        rc();
+        const char *opts[] = {"[1] Browse File", "[2] Type Filename / Path", "[3] Help", "[4] Back"};
+        const char *desc[] = {
+#ifdef _WIN32
+            "  Open Windows file picker (CSV only)",
+#else
+            "  List .csv files in current folder",
+#endif
+            "  Type the filename or path manually",
+            "  Format & usage info",
+            "  Return to main menu"};
+        for (int i = 0; i < 4; i++)
+        {
+            clrLine(sr + 1 + i);
+            gotoxy(0, sr + 1 + i);
+            std::cout << "  ";
+            if (i == hi)
+            {
+                sc(YELLOW);
+                std::cout << "-> " << opts[i];
+                sc(DGRAY);
+                std::cout << desc[i];
+            }
+            else
+            {
+                sc(DGRAY);
+                std::cout << "   " << opts[i] << desc[i];
+            }
+            rc();
+        }
+        clrLine(sr + 5);
+        gotoxy(0, sr + 5);
+        sc(DGRAY);
+        std::cout << "  Press 1 / 2 / 3 / 4";
+        rc();
+    };
+    drawImport(-1);
+    while (true)
+    {
+        int k = rk();
+        if (k == '1')
+        {
+            drawImport(0);
+            ms(120);
+            for (int r = sr; r <= sr + 5; r++)
+                clrLine(r);
+            gotoxy(0, sr);
+            std::string file = pickCSVFile();
+            if (!file.empty())
+                doImportCSV(file);
+            else
+            {
+                cls();
+                std::cout << "\n";
+                sc(DGRAY);
+                std::cout << "  No file selected.\n";
+                rc();
+                ms(1000);
+                cls();
+            }
+            return;
+        }
+        if (k == '2')
+        {
+            drawImport(1);
+            ms(120);
+            for (int r = sr; r <= sr + 5; r++)
+                clrLine(r);
+            gotoxy(0, sr);
+            cls();
+            std::cout << "\n";
+            hl('=', YELLOW);
+            sc(YELLOW);
+            std::cout << "  [ IMPORT — Enter File Path ]\n";
+            rc();
+            hl('-', DGRAY);
+            std::cout << "\n";
+            sc(DGRAY);
+            std::cout << "  Enter the CSV filename or full path.\n";
+            std::cout << "  Examples:\n";
+            std::cout << "    swertres.csv\n";
+            std::cout << "    /home/user/downloads/swertres.csv\n\n";
+            rc();
+            hl('-', DGRAY);
+            std::string filename = inp("  CSV file (or path): ");
+            if (filename.empty())
+            {
+                cls();
+                return;
+            }
+            // Auto-append .csv if missing
+            if (!endsWithCSV(filename))
+            {
+                std::ifstream test(filename + ".csv");
+                if (test.is_open())
+                {
+                    test.close();
+                    filename += ".csv";
+                }
+            }
+            doImportCSV(filename);
+            return;
+        }
+        if (k == '3')
+        {
+            gotoxy(0, sr);
+            clrLine(sr);
+            sc(YELLOW);
+            std::cout << "  HELP - IMPORT";
+            rc();
+            std::istringstream hs(help);
+            std::string hl2;
+            int hr = sr + 1;
+            while (std::getline(hs, hl2))
+            {
+                clrLine(hr);
+                gotoxy(0, hr);
+                sc(WHITE);
+                std::cout << hl2;
+                rc();
+                hr++;
+            }
+            clrLine(hr);
+            gotoxy(0, hr);
+            sc(DGRAY);
+            std::cout << "  Press any key...";
+            rc();
+            rk();
+            drawImport(-1);
+            continue;
+        }
+        if (k == '4' || k == KX)
+        {
+            for (int r = sr; r <= sr + 5; r++)
+                clrLine(r);
+            gotoxy(0, sr);
+            cls();
+            return;
+        }
+    }
+}
+
 // ════════════════════════════════════════════════════
-//  MAIN MENU
+//  MAIN MENU  — 8 items (removed Insert/Edit, Delete)
 // ════════════════════════════════════════════════════
 void mainMenu()
 {
@@ -3008,15 +3903,13 @@ void mainMenu()
         std::string code, label, desc;
     };
     std::vector<MI> items = {
-        {"[1]", "Search", "Find a digit by date & time"},
-        {"[2]", "Insert/Edit", "Add or update a local entry"},
-        {"[3]", "Show All", "Browse all records"},
-        {"[4]", "Probability", "Analyze digit frequency"},
-        {"[5]", "Last Digit", "Find combos unseen the longest"},
-        {"[6]", "Browse", "View latest Swertres results"},
-        {"[7]", "Sync DB", "Fetch history -> digit_data.txt"},
-        {"[8]", "Import CSV", "Load CSV file -> digit_data.txt"},
-        {"[9]", "Delete", "Remove a local entry"},
+        {"[1]", "S-R-W", "Strong / Random / Weak combo analyzer"},
+        {"[2]", "Show All", "Browse all records (auto-synced)"},
+        {"[3]", "Probability", "Analyze digit frequency"},
+        {"[4]", "Last Digit", "Find combos + repeating digit combos"},
+        {"[5]", "Browse", "View current year results"},
+        {"[6]", "Sync DB", "Full manual sync from lottopcso.com"},
+        {"[7]", "Import", "Load CSV file into digit_data.txt"},
         {"[0]", "Exit", "Quit the application"},
     };
     int sel = 0, n = (int)items.size();
@@ -3026,9 +3919,9 @@ void mainMenu()
         cur(false);
         std::cout << "\n";
         hl('=', CYAN);
-        cprt("  D I G I T   T R A C K E R   v 1 . 0  ", CYAN);
+        cprt("D I G I T   T R A C K E R   v 1 . 1", CYAN);
         std::cout << "\n";
-        cprt("  Local & Online  |  Swertres 3D  |  lottopcso.com  ", DGRAY);
+        cprt("Local + Online  |  Swertres 3D  |  lottopcso.com", DGRAY);
         std::cout << "\n";
         hl('=', CYAN);
         std::cout << "\n  ";
@@ -3065,7 +3958,7 @@ void mainMenu()
         sc(GREEN);
         std::cout << d.size();
         sc(DGRAY);
-        std::cout << " records";
+        std::cout << " records  |  Auto-Sync: ON when connected";
         rc();
         std::cout << "\n";
         cur(false);
@@ -3074,53 +3967,49 @@ void mainMenu()
             sel = (sel - 1 + n) % n;
         else if (k == 80 + 256 || k == 's' || k == 'S')
             sel = (sel + 1) % n;
-        else if (k >= '1' && k <= '9')
+        else if (k >= '1' && k <= '7')
         {
             sel = k - '1';
             goto act;
         }
         else if (k == '0')
         {
-            sel = 9;
+            sel = n - 1;
             goto act;
         }
         else if (k == KE)
             goto act;
         else if (k == 'q' || k == 'Q')
         {
-            sel = 9;
+            sel = n - 1;
             goto act;
         }
         continue;
     act:
         cur(true);
         if (sel == 0)
-            doSearch();
+            doSRW();
         else if (sel == 1)
-            doInsert();
-        else if (sel == 2)
             doShowAll();
-        else if (sel == 3)
+        else if (sel == 2)
             doProb();
-        else if (sel == 4)
+        else if (sel == 3)
             doLastDigit();
-        else if (sel == 5)
+        else if (sel == 4)
             doBrowse();
-        else if (sel == 6)
+        else if (sel == 5)
             doSyncDB();
+        else if (sel == 6)
+            doImport();
         else if (sel == 7)
-            doImportCSV();
-        else if (sel == 8)
-            doDelete();
-        else if (sel == 9)
         {
             if (confirmDlg("Exit?"))
             {
                 cls();
                 std::cout << "\n\n";
-                cprt("  Thank you for using Digit Tracker v1.0!  ", CYAN);
+                cprt("Thank you for using Digit Tracker v1.1!", CYAN);
                 std::cout << "\n";
-                cprt("  Data saved to " + DB + "  ", DGRAY);
+                cprt("Data saved to " + DB, DGRAY);
                 std::cout << "\n\n";
                 return;
             }
@@ -3140,10 +4029,10 @@ int main()
     DWORD mode;
     GetConsoleMode(hCon, &mode);
     SetConsoleMode(hCon, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-    SetConsoleTitleA("Digit Tracker v1.0");
-    SMALL_RECT ws = {0, 0, 99, 44};
+    SetConsoleTitleA("Digit Tracker v1.1");
+    SMALL_RECT ws = {0, 0, 119, 44};
     SetConsoleWindowInfo(hCon, TRUE, &ws);
-    COORD bs = {100, 3000};
+    COORD bs = {120, 3000};
     SetConsoleScreenBufferSize(hCon, bs);
 #else
     curl_global_init(CURL_GLOBAL_DEFAULT);
